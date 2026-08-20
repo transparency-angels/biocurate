@@ -1,44 +1,55 @@
 {% extends "base.html" %}
 {% block title %}Sessions — AI Co-Scientist{% endblock %}
+{% block heading %}Sessions{% endblock %}
+
+{% block actions %}
+<a class="btn btn-primary btn-sm" href="/sessions/new">New session</a>
+{% endblock %}
+
 {% block content %}
-<hgroup>
-    <h1>Sessions</h1>
-    <p>Tournament-style hypothesis generation. Each session: goal → hypotheses → reviews → Elo tournament → research overview.</p>
-</hgroup>
+<p class="lede">
+    Each session runs one research goal through Generation → Reflection → an Elo
+    tournament → Meta-review, and ends with a research overview.
+</p>
 
 {% if not sessions %}
-<article>
-    <p>No sessions yet.</p>
-    <a href="/sessions/new" role="button">Start your first session →</a>
-</article>
+<div class="empty">
+    <h3>No sessions yet</h3>
+    <p>Give it a research goal and it will generate, review and rank hypotheses.</p>
+    <a class="btn btn-primary" href="/sessions/new">Start your first session</a>
+</div>
 {% else %}
-<table>
-    <thead>
-    <tr>
-        <th>ID</th><th>Status</th><th>Goal</th>
-        <th style="text-align:right">Hyps</th><th style="text-align:right">Top Elo</th>
-        <th style="text-align:right">Spent</th><th>Updated</th>
-    </tr>
-    </thead>
-    <tbody>
-    {% for s in sessions %}
-    <tr>
-        <td><a href="/sessions/{{ s.id }}"><code>{{ s.id[-12:] }}</code></a></td>
-        <td>
-            <span class="status status-{{ s.status }}">{{ s.status }}</span>
-        </td>
-        <td style="max-width:32rem">{{ s.research_goal[:120] }}</td>
-        <td style="text-align:right">{{ s.n_hyps }}</td>
-        <td style="text-align:right">
-            {% if s.top_elo %}{{ "%.0f"|format(s.top_elo) }}{% else %}—{% endif %}
-        </td>
-        <td style="text-align:right">
-            ${{ "%.2f"|format(s.budget_used_usd) }} / ${{ "%.2f"|format(s.budget_usd) }}
-        </td>
-        <td><small>{{ s.updated_at[:19] }}</small></td>
-    </tr>
-    {% endfor %}
-    </tbody>
-</table>
+<div class="card">
+    <table>
+        <thead>
+        <tr>
+            <th>Goal</th>
+            <th>Status</th>
+            <th class="num">Hyps</th>
+            <th class="num">Top Elo</th>
+            <th class="num">Spent</th>
+            <th>Updated</th>
+        </tr>
+        </thead>
+        <tbody>
+        {% for s in sessions %}
+        <tr>
+            <td>
+                <a href="/sessions/{{ s.id }}">{{ s.research_goal[:110] or s.id }}</a>
+                <div style="color:var(--text-faint);font-size:0.74rem"><code>{{ s.id[-12:] }}</code></div>
+            </td>
+            <td><span class="badge badge-{{ s.status }}">{{ s.status }}</span></td>
+            <td class="num">{{ s.n_hyps }}</td>
+            <td class="num elo">{% if s.top_elo %}{{ "%.0f"|format(s.top_elo) }}{% else %}—{% endif %}</td>
+            <td class="num">
+                ${{ "%.2f"|format(s.budget_used_usd) }}
+                <span style="color:var(--text-faint)">/ ${{ "%.0f"|format(s.budget_usd) }}</span>
+            </td>
+            <td style="color:var(--text-muted);white-space:nowrap">{{ s.updated_at[:16] | replace("T", " ") }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
 {% endif %}
 {% endblock %}

@@ -4,8 +4,10 @@ One process per host: launching `co-scientist serve` runs both the API + UI
 and the worker pool — the queue is DB-backed so CLI `co-scientist run` in a
 separate terminal feeds tasks to whatever Supervisor is currently active.
 
-The UI is server-side Jinja2 + htmx for partial updates + SSE for live events.
-No JS build step. Pico.css for default styling.
+The UI is server-side Jinja2 + SSE for live events, in a sidebar / main / rail
+shell. No JS build step, and no CDN either: the stylesheet and the ~120 lines
+of JS are served from `static/`, so the console renders with the network
+unplugged — same local-first posture as the rest of the tool.
 """
 
 from __future__ import annotations
@@ -53,19 +55,41 @@ def create_app(cfg: Config | None = None) -> FastAPI:
     # Static
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 
+    async def shell(
+        extra: dict[str, Any],
+        *,
+        nav: str = "",
+        session_id: str = "",
+    ) -> dict[str, Any]:
+        """Merge in what the sidebar and footer need on every page.
+
+        The recents list is its own small query rather than something each
+        route threads through, so adding a page never means remembering to
+        populate the sidebar.
+        """
+        return {
+            **extra,
+            "nav_sessions": await _list_sessions(cfg, limit=12),
+            "active_nav": nav,
+            "active_session_id": session_id,
+            "env": _env_row(cfg),
+        }
+
     # ----------------------------- pages ----------------------------- #
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> HTMLResponse:
         rows = await _list_sessions(cfg)
         return TEMPLATES.TemplateResponse(
-            request, "index.html", {"sessions": rows}
+            request, "index.html", await shell({"sessions": rows}, nav="sessions")
         )
 
     @app.get("/sessions/new", response_class=HTMLResponse)
     async def new_session_form(request: Request) -> HTMLResponse:
         return TEMPLATES.TemplateResponse(
-            request, "new_session.html", {"default_budget": cfg.run.budget_usd}
+            request,
+            "new_session.html",
+            await shell({"default_budget": cfg.run.budget_usd}, nav="new"),
         )
 
     @app.post("/sessions/new")
@@ -114,12 +138,16 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             return TEMPLATES.TemplateResponse(
                 request,
                 "session_detail.html",
-                {
-                    "session": session,
-                    "hypotheses": sorted(hyps, key=lambda h: -(h.elo or 0)),
-                    "recent_matches": recent_matches,
-                    "usage": usage,
-                },
+                await shell(
+                    {
+                        "session": session,
+                        "hypotheses": sorted(hyps, key=lambda h: -(h.elo or 0)),
+                        "recent_matches": recent_matches,
+                        "usage": usage,
+                        "stages": _stages(session, hyps),
+                    },
+                    session_id=session_id,
+                ),
             )
         finally:
             await conn.close()
@@ -136,12 +164,15 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             return TEMPLATES.TemplateResponse(
                 request,
                 "hypothesis_detail.html",
-                {
-                    "session": session,
-                    "h": h,
-                    "reviews": reviews,
-                    "full_text_html": render_markdown(h.full_text or ""),
-                },
+                await shell(
+                    {
+                        "session": session,
+                        "h": h,
+                        "reviews": reviews,
+                        "full_text_html": render_markdown(h.full_text or ""),
+                    },
+                    session_id=session_id,
+                ),
             )
         finally:
             await conn.close()
@@ -172,11 +203,14 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             return TEMPLATES.TemplateResponse(
                 request,
                 "overview.html",
-                {
-                    "session": session,
-                    "overview_html": render_markdown(overview_md),
-                    "overview_md": overview_md,
-                },
+                await shell(
+                    {
+                        "session": session,
+                        "overview_html": render_markdown(overview_md),
+                        "overview_md": overview_md,
+                    },
+                    session_id=session_id,
+                ),
             )
         finally:
             await conn.close()
@@ -297,7 +331,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
 # ----------------------------- helpers ----------------------------- #
 
 
-async def _list_sessions(cfg: Config) -> list[dict[str, Any]]:
+async def _list_sessions(cfg: Config, *, limit: int = 50) -> list[dict[str, Any]]:
     conn = await db_mod.connect(cfg)
     try:
         async with conn.execute(
@@ -306,12 +340,60 @@ async def _list_sessions(cfg: Config) -> list[dict[str, Any]]:
                       (SELECT COUNT(*) FROM hypotheses WHERE session_id = s.id) AS n_hyps,
                       (SELECT MAX(elo) FROM hypotheses WHERE session_id = s.id) AS top_elo
                  FROM sessions s
-                 ORDER BY updated_at DESC LIMIT 50""",
+                 ORDER BY updated_at DESC LIMIT ?""",
+            (limit,),
         ) as cur:
             rows = await cur.fetchall()
     finally:
         await conn.close()
     return [dict(r) for r in rows]
+
+
+def _env_row(cfg: Config) -> dict[str, Any]:
+    """What the sidebar footer shows: which backend, model and folder are live.
+
+    Answers "what is this actually running on" without a trip to `doctor`,
+    which matters most when the workspace is on — you want to see the folder
+    the agents can write to before you launch anything.
+    """
+    from ..llm.provider import CLI_BACKENDS
+    from ..tools.workspace import workspace_root
+
+    backend = (getattr(cfg.llm, "provider", "") or "").strip() or "openrouter"
+    root = workspace_root(cfg)
+    return {
+        "backend": backend,
+        "is_cli": backend in CLI_BACKENDS,
+        "model": cfg.models.generation,
+        "workspace": str(root) if root else "off",
+        "workspace_on": root is not None,
+    }
+
+
+# Ordered pipeline stages, and the evidence that each one has happened. The
+# session row alone can't say this — "has any hypothesis been reviewed" is a
+# fact about the hypotheses table — so the caller passes what it already
+# fetched rather than us re-querying.
+def _stages(session: Any, hypotheses: list[Any]) -> list[dict[str, str]]:
+    done_states = {"reviewed", "in_tournament", "pinned", "rejected", "retired"}
+    reached = [
+        ("Generation", bool(hypotheses)),
+        ("Reflection", any(h.state in done_states for h in hypotheses)),
+        ("Ranking", any((h.matches_played or 0) > 0 for h in hypotheses)),
+        ("Evolution", any(h.parent_ids for h in hypotheses)),
+        ("Meta-review", bool(session.final_overview)),
+    ]
+    out: list[dict[str, str]] = []
+    active_marked = session.status not in ("running", "paused")
+    for label, is_done in reached:
+        if is_done:
+            state = "done"
+        elif not active_marked:
+            state, active_marked = "active", True
+        else:
+            state = ""
+        out.append({"label": label, "state": state})
+    return out
 
 
 async def _recent_matches(conn, session_id: str, *, limit: int) -> list[dict[str, Any]]:

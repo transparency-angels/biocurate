@@ -200,6 +200,23 @@ class WebFetchCfg(BaseModel):
     user_agent: str = "co-scientist/0.1"
 
 
+class WorkspaceCfg(BaseModel):
+    """A folder on disk the agents may read and write.
+
+    Off unless `root` is set. Everything the file tools touch is confined to
+    the resolved root: `..` segments, absolute paths and symlinks that escape
+    it are rejected rather than clamped, so a prompt-injected path in a source
+    document cannot reach the rest of the filesystem.
+    """
+
+    root: str = ""
+    allow_write: bool = True
+    max_read_chars: int = 30_000
+    """Default truncation for one `file_read`. The tool takes an override."""
+    max_write_bytes: int = 5_000_000
+    max_list_entries: int = 500
+
+
 class CodeExecCfg(BaseModel):
     provider: str = "local"
     local_cpu_seconds: int = 30
@@ -387,6 +404,7 @@ class Config(BaseModel):
     lease: LeaseCfg = Field(default_factory=LeaseCfg)
     web_search: WebSearchCfg = Field(default_factory=WebSearchCfg)
     web_fetch: WebFetchCfg = Field(default_factory=WebFetchCfg)
+    workspace: WorkspaceCfg = Field(default_factory=WorkspaceCfg)
     code_exec: CodeExecCfg = Field(default_factory=CodeExecCfg)
     safety: SafetyCfg = Field(default_factory=SafetyCfg)
     llm: LLMCfg = Field(default_factory=LLMCfg)

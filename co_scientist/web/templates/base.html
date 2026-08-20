@@ -4,21 +4,67 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}AI Co-Scientist{% endblock %}</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
-    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    {# Local-only assets: the daemon has to render with the network unplugged. #}
     <link rel="stylesheet" href="/static/app.css">
+    <script defer src="/static/app.js"></script>
 </head>
 <body>
-<nav class="container-fluid">
-    <ul>
-        <li><strong><a href="/" style="text-decoration:none">AI Co-Scientist</a></strong></li>
-    </ul>
-    <ul>
-        <li><a href="/sessions/new" role="button">New session</a></li>
-    </ul>
-</nav>
-<main class="container">
-    {% block content %}{% endblock %}
-</main>
+{# Children opt into the right rail with `{% set has_rail = true %}` at the
+   top level (outside any block), which Jinja propagates up to this layout. #}
+<div class="shell{% if has_rail %} has-rail{% endif %}">
+
+    <aside class="sidebar">
+        <a class="brand" href="/">
+            <span class="brand-mark">CS</span>
+            <span>Co-Scientist</span>
+        </a>
+
+        <div class="nav-group">
+            <a class="nav-item {% if active_nav == 'new' %}active{% endif %}" href="/sessions/new">
+                <span class="dot s-accent"></span>
+                <span class="label">New session</span>
+            </a>
+            <a class="nav-item {% if active_nav == 'sessions' %}active{% endif %}" href="/">
+                <span class="dot"></span>
+                <span class="label">All sessions</span>
+            </a>
+        </div>
+
+        {% if nav_sessions %}
+        <div class="nav-group nav-recents">
+            <div class="nav-label">Recents</div>
+            {% for s in nav_sessions %}
+            <a class="nav-item {% if s.id == active_session_id %}active{% endif %}"
+               href="/sessions/{{ s.id }}" title="{{ s.research_goal }}">
+                <span class="dot s-{{ s.status }}"></span>
+                <span class="label">{{ s.research_goal[:44] or s.id[-12:] }}</span>
+            </a>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <div class="sidebar-foot">
+            <div class="row"><span>backend</span><span class="val">{{ env.backend }}</span></div>
+            <div class="row"><span>model</span><span class="val">{{ env.model }}</span></div>
+            <div class="row"><span>workspace</span><span class="val">{{ env.workspace }}</span></div>
+        </div>
+    </aside>
+
+    <main class="main">
+        <header class="topbar">
+            <span class="title">{% block heading %}Co-Scientist{% endblock %}</span>
+            <span class="spacer"></span>
+            {% block actions %}{% endblock %}
+        </header>
+        <div class="content {% block content_class %}{% endblock %}">
+            {% block content %}{% endblock %}
+        </div>
+    </main>
+
+    {% if has_rail %}
+    <aside class="rail">{% block rail %}{% endblock %}</aside>
+    {% endif %}
+
+</div>
 </body>
 </html>

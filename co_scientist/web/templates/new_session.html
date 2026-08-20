@@ -1,28 +1,79 @@
 {% extends "base.html" %}
 {% block title %}New session — AI Co-Scientist{% endblock %}
+{% block heading %}New session{% endblock %}
+{% set has_rail = true %}
+
 {% block content %}
-<h1>Start a new session</h1>
 <form method="POST" action="/sessions/new">
-    <label>Research goal
-        <textarea name="goal" rows="3" placeholder="Investigate plausible mechanisms by which X causes Y..."  required></textarea>
-    </label>
-    <label>Preferences (optional, free text)
-        <textarea name="preferences" rows="2" placeholder="prefer mechanistically specific, testable hypotheses"></textarea>
-    </label>
-    <div class="grid">
-        <label>Budget (USD)
-            <input type="number" name="budget_usd" step="0.5" min="1" value="{{ default_budget }}">
+    <div class="card">
+        <label class="field">
+            <span class="lbl">Research goal</span>
+            <textarea name="goal" rows="4" required
+                      placeholder="Identify plausible mechanisms by which gut microbiome shifts drive inflammation in inflammatory bowel disease"></textarea>
+            <span class="hint">One question. Specific beats broad — the tournament needs room to separate rival mechanisms.</span>
         </label>
-        <label>Initial generations (parallel)
-            <input type="number" name="n_initial" min="1" max="10" value="3">
+
+        <label class="field">
+            <span class="lbl">Preferences <span style="font-weight:400;color:var(--text-faint)">(optional)</span></span>
+            <textarea name="preferences" rows="2"
+                      placeholder="prefer mechanistically specific, wet-lab testable hypotheses; avoid pure correlation studies"></textarea>
+            <span class="hint">Free text. Steers Generation and is used as a ranking criterion.</span>
         </label>
-        <label>Wall clock (s)
-            <input type="number" name="wall_clock_seconds" min="60" step="60" value="7200">
-        </label>
+
+        <div class="grid-3">
+            <label class="field">
+                <span class="lbl">Budget (USD)</span>
+                <input type="number" name="budget_usd" step="0.5" min="1" value="{{ default_budget }}">
+                <span class="hint">Stops the run when hit.</span>
+            </label>
+            <label class="field">
+                <span class="lbl">Initial hypotheses</span>
+                <input type="number" name="n_initial" min="1" max="10" value="3">
+                <span class="hint">Generated in parallel.</span>
+            </label>
+            <label class="field">
+                <span class="lbl">Wall clock (s)</span>
+                <input type="number" name="wall_clock_seconds" min="60" step="60" value="7200">
+                <span class="hint">Hard deadline.</span>
+            </label>
+        </div>
+
+        <div class="btn-row">
+            <button class="btn btn-primary" type="submit">Launch session</button>
+            <a class="btn" href="/">Cancel</a>
+        </div>
     </div>
-    <button type="submit">Launch</button>
-    <a href="/" role="button" class="secondary">Cancel</a>
 </form>
-<p><small>The session runs in the same process as this UI. You'll be redirected back to the
-sessions list — it should appear at the top within a few seconds.</small></p>
+{% endblock %}
+
+{% block rail %}
+<div class="rail-section">
+    <h3>What happens</h3>
+    <div class="steps">
+        <div class="step"><span class="pip"></span><span><strong>Generation</strong> — literature-grounded and debate hypotheses</span></div>
+        <div class="step"><span class="pip"></span><span><strong>Reflection</strong> — review, verify claims, check citations</span></div>
+        <div class="step"><span class="pip"></span><span><strong>Ranking</strong> — Elo tournament, pairwise and debate</span></div>
+        <div class="step"><span class="pip"></span><span><strong>Evolution</strong> — combine, simplify, push out of the box</span></div>
+        <div class="step"><span class="pip"></span><span><strong>Meta-review</strong> — the final research overview</span></div>
+    </div>
+</div>
+
+<div class="rail-section">
+    <h3>Context</h3>
+    <div class="file-row"><span class="ico">▣</span><span>{{ env.backend }} · {{ env.model }}</span></div>
+    <div class="file-row"><span class="ico">▤</span><span>{{ env.workspace }}</span></div>
+    {% if env.workspace_on %}
+    <p style="font-size:0.76rem;color:var(--text-faint);margin-top:0.4rem">
+        Agents can read and write this folder as source material.
+    </p>
+    {% endif %}
+</div>
+
+<div class="rail-section">
+    <h3>Note</h3>
+    <p style="font-size:0.78rem;color:var(--text-faint)">
+        The session runs inside this server process. You'll land back on the
+        sessions list — it appears there within a few seconds.
+    </p>
+</div>
 {% endblock %}

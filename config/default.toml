@@ -173,6 +173,21 @@ max_bytes = 5_000_000
 timeout_seconds = 30
 user_agent = "co-scientist/0.1 (+research; contact via project README)"
 
+# A folder of your own material the agents may read and write: papers, data,
+# prior notes. Off until `root` is set. Setting it registers `file_list`,
+# `file_read` and `file_write` for Generation, Reflection and Evolution, under
+# every backend — the CLI ones reach them through the bundled MCP server, so
+# the calls still land in the provenance log.
+#
+# Everything is confined to the resolved root. `..`, absolute paths, and
+# symlinks pointing outside are rejected rather than clamped.
+[workspace]
+root = ""                            # e.g. "~/research/ibd-microbiome"
+allow_write = true                   # false registers only file_list/file_read
+max_read_chars = 30_000
+max_write_bytes = 5_000_000
+max_list_entries = 500
+
 [code_exec]
 provider = "local"
 local_cpu_seconds = 30

@@ -16,19 +16,26 @@ from .builtins.pubmed import PubmedSearchTool
 from .science_skills import ScienceSkillTool, discover_skills
 from .web_fetch import WebFetchTool
 from .web_search import WebSearchTool
+from .workspace import FileListTool, FileReadTool, FileWriteTool, workspace_root
 
 # Per-agent tool allowlists. Keys are tool names (or "literature_*" wildcards
 # matched explicitly in the resolver).
+#
+# "file_*" only resolves to anything when [workspace] root is set — the
+# workspace tools are not registered otherwise, so listing them here is inert
+# on a default install.
 AGENT_TOOLS: dict[str, set[str]] = {
     "generation": {
         "web_search", "web_fetch",
         "pubmed_search", "arxiv_search", "europe_pmc_search",
         "literature_*",   # any science-skills literature_* tools
+        "file_*",         # workspace folder, when configured
     },
     "reflection": {
         "web_search", "web_fetch",
         "pubmed_search", "arxiv_search", "europe_pmc_search",
         "literature_*",
+        "file_*",
         # code_exec wired in M2
     },
     "ranking": set(),                # no tools mid-debate
@@ -36,6 +43,7 @@ AGENT_TOOLS: dict[str, set[str]] = {
         "web_search", "web_fetch",
         "pubmed_search", "arxiv_search", "europe_pmc_search",
         "literature_*",
+        "file_*",
     },
     "proximity": set(),
     "metareview": set(),
@@ -66,6 +74,14 @@ class ToolRegistry:
             or self._cfg.secrets.BRAVE_API_KEY or os.environ.get("BRAVE_API_KEY")
         ):
             self._register(WebSearchTool(self._cfg))
+        # Workspace file tools — only when a root is configured. Registering
+        # them unconditionally would show every agent a folder that isn't
+        # there, and they'd waste turns discovering it is empty.
+        if workspace_root(self._cfg) is not None:
+            self._register(FileListTool(self._cfg))
+            self._register(FileReadTool(self._cfg))
+            if self._cfg.workspace.allow_write:
+                self._register(FileWriteTool(self._cfg))
         # Science-skills
         for meta in discover_skills(self._cfg):
             self._register(ScienceSkillTool(self._cfg, meta))

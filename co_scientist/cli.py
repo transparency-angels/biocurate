@@ -84,6 +84,18 @@ def _embeddings_row(cfg) -> str:
     )
 
 
+def _workspace_row(cfg) -> str:
+    from .tools.workspace import workspace_root
+
+    root = workspace_root(cfg)
+    if root is None:
+        return "[dim]off — set [workspace] root to give agents a folder[/dim]"
+    if not root.is_dir():
+        return f"[red]{root} does not exist[/red]"
+    mode = "read+write" if cfg.workspace.allow_write else "read-only"
+    return f"{root} ({mode})"
+
+
 @app.command()
 def doctor(ctx: typer.Context) -> None:
     """Check that the configured backend, its credentials, and tools all work.
@@ -137,6 +149,7 @@ def doctor(ctx: typer.Context) -> None:
         else f"[yellow]{len(model_problems)} look like another provider's ids[/yellow]",
     )
     tbl.add_row("embeddings", _embeddings_row(cfg))
+    tbl.add_row("workspace", _workspace_row(cfg))
     console.print(tbl)
 
     for problem in model_problems:

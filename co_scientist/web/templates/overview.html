@@ -1,18 +1,54 @@
 {% extends "base.html" %}
-{% block title %}Overview — {{ session.id[-12:] }}{% endblock %}
+{% block title %}Research overview — {{ session.id[-12:] }}{% endblock %}
+{% block heading %}Research overview{% endblock %}
+{% set has_rail = true %}
+
+{% block actions %}
+<a class="btn btn-sm" href="/sessions/{{ session.id }}">Back to session</a>
+{% endblock %}
+
 {% block content %}
-<nav aria-label="breadcrumb">
-    <ul>
-        <li><a href="/">Sessions</a></li>
-        <li><a href="/sessions/{{ session.id }}">{{ session.id[-12:] }}</a></li>
-        <li>overview</li>
-    </ul>
-</nav>
-<details>
+<div class="crumbs">
+    <a href="/">Sessions</a><span>/</span>
+    <a href="/sessions/{{ session.id }}">{{ session.id[-12:] }}</a><span>/</span>
+    <span>overview</span>
+</div>
+
+<article class="prose">{{ overview_html | safe }}</article>
+
+<details style="margin-top:2rem">
     <summary>Raw markdown</summary>
     <pre>{{ overview_md }}</pre>
 </details>
-<article>
-    {{ overview_html | safe }}
-</article>
+{% endblock %}
+
+{% block rail %}
+<div class="rail-section">
+    <h3>Goal</h3>
+    <p style="font-size:0.82rem;color:var(--text-muted)">{{ session.research_goal }}</p>
+</div>
+
+<div class="rail-section">
+    <h3>Session</h3>
+    <div class="stat" style="margin-bottom:0.7rem">
+        <span class="k">Status</span>
+        <span class="v" style="font-size:0.9rem;padding-top:0.3rem">
+            <span class="badge badge-{{ session.status }}">{{ session.status }}</span>
+        </span>
+    </div>
+    <div class="stat">
+        <span class="k">Spent</span>
+        <span class="v">${{ "%.2f"|format(session.budget_used_usd) }}</span>
+        <span class="sub">{{ "{:,}".format(session.budget_used_tokens) }} tokens</span>
+    </div>
+</div>
+
+<div class="rail-section">
+    <h3>Reading it</h3>
+    <p style="font-size:0.78rem;color:var(--text-faint)">
+        Citations in <code>[S..]</code> point at sources an agent actually
+        fetched. <code>[H-..]</code> refers to a hypothesis in this session's
+        leaderboard.
+    </p>
+</div>
 {% endblock %}
