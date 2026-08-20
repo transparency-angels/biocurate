@@ -81,6 +81,9 @@ ignore = ["E501", "RUF002"]
 "co_scientist/cli.py" = ["B008"]                  # typer.Option/Argument as defaults
 "co_scientist/tools/*.py" = ["RUF012"]            # ClassVar JSONSchema dicts read-only
 "co_scientist/tools/**/*.py" = ["RUF012"]
+# The bench report renders real minus signs and multiplication signs in its
+# tables. They are correct typography, not typos.
+"scripts/build_bench_report.py" = ["RUF001"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

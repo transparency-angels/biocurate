@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+title: "AI co-scientist: an open re-implementation"
+message: >-
+  If you use this software, please cite both this repository and the paper it
+  re-implements.
+type: software
+authors:
+  - name: "Co-Scientist contributors"
+repository-code: "https://github.com/Kaimen-Inc/Co-Scientist"
+license: Apache-2.0
+version: "0.1.0"
+keywords:
+  - hypothesis generation
+  - multi-agent systems
+  - scientific discovery
+  - large language models
+  - agent skills
+references:
+  - type: article
+    title: "Towards an AI co-scientist"
+    authors:
+      - family-names: Gottweis
+        given-names: Juraj
+    journal: Nature
+    year: 2026
+    doi: 10.1038/s41586-026-10644-y

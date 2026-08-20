@@ -1,29 +1,124 @@
+<div align="center">
+
 # AI co-scientist
 
-An open source re-implementation of Google's **AI co-scientist** ([Gottweis et al., *Nature*, 2026](https://www.nature.com/articles/s41586-026-10644-y); [research blog, 2025](https://research.google/blog/accelerating-scientific-breakthroughs-with-an-ai-co-scientist/)) — a multi-agent system that takes a natural-language research goal and produces a tournament-ranked **research overview** of novel hypotheses.
+**Give it a research goal. Get back a tournament-ranked set of novel, reviewed, testable hypotheses.**
 
-**It runs on an LLM API key or on your Claude Code / Codex subscription.** The default routes everything through **OpenRouter**, so one key reaches 200+ models from every vendor and `[models]` can mix them per agent. You can also point `[llm] provider` at Anthropic, OpenAI, or Gemini directly, or at a local `claude -p` / `codex exec` CLI that authenticates with its own OAuth login and bills nothing per token. Under the CLI backends, structured output and citation provenance come back through a bundled MCP server. Either way the agents are identical — see [LLM backend](#llm-backend).
+An open source re-implementation of Google's AI co-scientist
+([Gottweis et al., *Nature*, 2026](https://www.nature.com/articles/s41586-026-10644-y) ·
+[research blog](https://research.google/blog/accelerating-scientific-breakthroughs-with-an-ai-co-scientist/)),
+in Python, running on an API key **or** on your Claude Code / Codex subscription.
 
-The agent roster, prompts, and control flow follow the paper. Source materials that were used to instruct the coding agent (mainly Claude Code) include:
+[![tests](https://github.com/Kaimen-Inc/Co-Scientist/actions/workflows/test.yml/badge.svg)](https://github.com/Kaimen-Inc/Co-Scientist/actions/workflows/test.yml)
+[![Python 3.11 to 3.13](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)](pyproject.toml)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
+[![Agent Plugins 1.0](https://img.shields.io/badge/Agent%20Plugins-1.0-8A2BE2)](plugin/)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
 
-- [`reference/8 Pseudocode of Co-Scientist agents`](reference/) — the supplementary pseudocode for Supervisor, Generation, Reflection, Ranking, Evolution, Proximity, Meta-review.
-- [`reference/9 Prompts for the specialized agents in .md`](reference/) — the per-agent prompts from the paper's supplement, used verbatim (modulo Jinja interpolation) in [`config/prompts/`](config/prompts/).
-- [`reference/AICoScientist-*.png`](reference/) — the architecture and component diagrams from the paper.
+[Quickstart](#quickstart) ·
+[How it works](#how-it-works) ·
+[Use it from Claude Code or Codex](#use-it-from-claude-code-or-codex) ·
+[Bench results](docs/BENCH_RESULTS.md) ·
+[Contributing](CONTRIBUTING.md)
 
-The agents:
+</div>
 
-- **Generation** — proposes hypotheses via literature review and simulated scientific debate.
-- **Reflection** — reviews hypotheses for novelty, correctness, and testability; deep-verifies the underlying assumptions.
-- **Ranking** — runs an Elo tournament with simulated debates between hypotheses.
-- **Evolution** — combines, simplifies, makes more feasible, or out-of-box-reimagines top-ranked hypotheses.
-- **Proximity** — embeds and clusters hypotheses to drive dedup and informative tournament pairings.
-- **Meta-review** — synthesizes system-wide feedback and the final research overview.
+---
 
-A **Supervisor** parses the goal into a research plan and schedules agent tasks through a durable SQLite-backed queue with bounded concurrency.
+## What it does
 
-This is an independent re-implementation in Python on top of pluggable LLM provider SDKs — not affiliated with Google or the paper's authors.
+You write a research goal in plain language. Six specialist agents then argue
+about it until something good survives:
 
-> [`docs/BENCH_RESULTS.md`](docs/BENCH_RESULTS.md) — every cross-model bench ever run on this code, with per-candidate Elo, every hypothesis produced, gold-set hits, and direct file pointers. Auto-generated from the bench DB.
+```
+co-scientist run "Identify hypotheses about microbiome-driven inflammation in Crohn's disease"
+```
+
+Generation proposes hypotheses from the literature and from simulated
+scientific debate. Reflection reviews each one for novelty, correctness and
+testability, then decomposes it into assumptions and checks those separately.
+Ranking runs an Elo tournament of head-to-head debates. Evolution combines,
+simplifies, makes feasible or reimagines the leaders, and the results re-enter
+the tournament. Proximity clusters everything so near-duplicates do not waste
+matches. Meta-review synthesises the whole session into a research overview.
+
+What comes out is not a chat answer. It is a ranked leaderboard with the
+reviews, the debate rationales, the citations and the full provenance behind
+each entry, all in a local SQLite database you can query.
+
+## Why this one
+
+|  | What you get |
+| --- | --- |
+| **Faithful to the paper** | The agent roster, the prompts and the control flow follow Gottweis et al. The per-agent prompts in [`config/prompts/`](config/prompts/) come from the paper's supplement. |
+| **Runs on a subscription** | Point it at `claude -p` or `codex exec` and it bills nothing per token. Structured output and citation provenance come back through a bundled MCP server. |
+| **Or any model you like** | OpenRouter by default, so one key reaches 200+ models and `[models]` can give each agent a different vendor. Anthropic, OpenAI, Gemini, Groq, Together, Mistral and Ollama work directly. |
+| **Durable, resumable runs** | A SQLite-backed task queue with leases, dead-lettering and resume. Kill it mid-session and `resume` picks up where it stopped. |
+| **Citations you can check** | An agent may only cite a URL it actually fetched. Every evidence row carries a URL and an excerpt, and a verifier enforces both. |
+| **Driveable by coding agents** | [`plugin/`](plugin/) is an Agent Plugins 1.0 package: one MCP server and seven skills that work in Claude Code, Codex CLI, Cursor, VS Code, Copilot and Kiro. |
+| **Measured, not asserted** | `co-scientist bench` settles N models on one goal in a shared Elo tournament with gold-set recall scoring. Every run ever done is in [`docs/BENCH_RESULTS.md`](docs/BENCH_RESULTS.md). |
+| **Tested** | 418 unit tests, all offline. No key, no network, no subscription quota to run the suite. |
+
+## Quickstart
+
+```bash
+git clone https://github.com/Kaimen-Inc/Co-Scientist.git
+cd Co-Scientist
+python3.12 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+
+# Pick one backend.
+export OPENROUTER_API_KEY=...   # one key, 200+ models
+# ...or run on a subscription you already pay for, with no key at all:
+claude                          # sign in to Claude Code once, then quit
+
+co-scientist init
+co-scientist doctor             # must report a ready backend
+
+co-scientist run "Identify hypotheses about microbiome-driven inflammation" \
+  --n 3 --budget-usd 2.0 --wall-clock 600
+
+co-scientist report <session-id>    # the final research overview
+co-scientist serve                  # live dashboard at localhost:7878
+```
+
+`doctor` costs nothing and tells you exactly what is missing. Run it first.
+
+Full detail: [Install](#install) · [LLM backend](#llm-backend) ·
+[Run a research session](#run-a-research-session)
+
+## How it works
+
+The agent roster and control flow follow the paper:
+
+| Agent | What it does |
+| --- | --- |
+| **Generation** | Proposes hypotheses through literature review and simulated scientific debate. |
+| **Reflection** | Reviews for novelty, correctness and testability, and deep-verifies the assumptions underneath. |
+| **Ranking** | Runs an Elo tournament of simulated debates between hypotheses. |
+| **Evolution** | Combines, simplifies, makes feasible, or reimagines top-ranked hypotheses out of the box. |
+| **Proximity** | Embeds and clusters hypotheses to drive dedup and informative tournament pairings. |
+| **Meta-review** | Synthesises system-wide feedback and writes the final research overview. |
+
+A **Supervisor** parses the goal into a research plan and schedules agent tasks
+through a durable SQLite-backed queue with bounded concurrency. It stops on
+whichever comes first: budget, wall clock, Elo stability, or an idle queue.
+
+See [Architecture](#architecture) for the full picture, including the shared
+infrastructure underneath.
+
+The source materials used to instruct the coding agent that built this came
+from the paper's supplement: the pseudocode for every agent, the per-agent
+prompts, and the architecture diagrams. They live in a local `reference/`
+directory that is **not redistributed here**, since they belong to the paper's
+authors. Get them from the
+[paper's supplementary information](https://www.nature.com/articles/s41586-026-10644-y#Sec44).
+The prompts as this repo uses them, with Jinja interpolation, are in
+[`config/prompts/`](config/prompts/).
+
+> This is an independent re-implementation. It is not affiliated with Google or
+> with the paper's authors, and hypotheses it produces are a starting point for
+> a scientist, not a finding.
 
 ## Contents
 
@@ -34,7 +129,10 @@ This is an independent re-implementation in Python on top of pluggable LLM provi
 - [LLM backend](#llm-backend)
 - [Configuration](#configuration)
 - [Bench: compare models head-to-head](#bench-compare-models-head-to-head)
+- [Use it from Claude Code or Codex](#use-it-from-claude-code-or-codex)
 - [Repository layout](#repository-layout)
+- [Contributing](#contributing)
+- [Citing this work](#citing-this-work)
 
 ## Architecture
 
@@ -496,6 +594,41 @@ The auto-generated [`docs/BENCH_RESULTS.md`](docs/BENCH_RESULTS.md) (rebuild wit
 - **Structured verdict** via a forced `record_verdict` function call — no fragile `better idea: <N>` text parsing across providers.
 - Bench runs are **isolated from regular sessions** — they don't write to `tournament_matches` or affect any session's leaderboard.
 
+## Use it from Claude Code or Codex
+
+[`plugin/`](plugin/) is an [Agent Plugins 1.0](https://agent-plugins.org/specification)
+directory that lets a coding agent drive the engine: one `plugin.json`, one
+`mcp.json`, and seven skills. The same directory loads in Codex CLI, Claude
+Code, Cursor, VS Code, GitHub Copilot and Kiro, so there is no per-client copy.
+
+```bash
+codex plugins install ./plugin                        # Codex CLI
+
+ln -s "$PWD/plugin/skills/"* ~/.claude/skills/        # Claude Code
+claude mcp add co-scientist -- co-scientist mcp-server
+```
+
+The MCP server is `co-scientist mcp-server`, defined in
+[`co_scientist/mcp/session_server.py`](co_scientist/mcp/session_server.py). It
+serves fifteen tools: session lifecycle (`session_start`, `resume`, `pause`,
+`abort`, `status`, `list`), reading (`hypotheses_list`, `hypothesis_get`,
+`overview_get`), writing (`hypothesis_record`, `review_record`, `match_record`,
+`feedback_add`), and diagnostics (`estimate_cost`, `doctor`).
+
+The design rule: the engine keeps all state, and everything an agent produces
+goes back in through the same repositories the engine's own agents use. A review
+written by Claude Code and a review written by the Reflection agent are the same
+row in the same table, so Elo stays coherent and the meta-review sees both. The
+skills carry the judgement the tools cannot: the review rubric, the debate
+criteria, the four evolution operators, and the failure modes to check before
+believing a ranked hypothesis.
+
+Add `--read-only` to the server command (or `COSCI_ALLOW_START=0`) to refuse
+`session_start` on shared machines, so an agent cannot spend budget on its own.
+
+See [`plugin/README.md`](plugin/README.md) for install detail, virtualenv paths,
+and how to validate a change with `python scripts/validate_plugin.py`.
+
 ## Repository layout
 
 ```
@@ -505,6 +638,8 @@ co_scientist/
   bench/        # cross-model bench runner (Elo tournament + gold-set scoring)
   llm/          # provider abstraction (anthropic / openai / openai_compatible),
                 # tool loop, token budgets, model routing, retry, batch, estimator
+  mcp/          # MCP servers: per-call capture for the CLI backends, plus the
+                # outward-facing session server the Agent Plugin launches
   storage/      # SQLite schema + migrations, db connection, 10 repos
   tools/        # tool registry; web_fetch, web_search, pubmed/arxiv/europe_pmc,
                 # science-skills bridge
@@ -514,20 +649,60 @@ co_scientist/
   obs/          # metrics (tokens, cost, cache hit ratio, latency)
   web/          # FastAPI + htmx + SSE UI + sanitized markdown renderer
   evals/        # per-agent + e2e + regression evals
-  tests/        # 213 unit tests + fixtures + smoke
+  tests/        # 418 unit tests (all offline) + fixtures + smoke
 config/
   default.toml
   prompts/      # 14 Jinja2 templates (one per agent.mode), derived from
                 # the paper's supplementary prompts
 docs/
   BENCH_RESULTS.md   # every bench ever run (auto-generated)
+plugin/         # Agent Plugins 1.0 package: plugin.json, mcp.json, 7 skills
+                # loadable by Claude Code, Codex CLI, Cursor, VS Code, Copilot
 scripts/
   build_bench_report.py
+  validate_plugin.py # spec conformance check for plugin/
 reference/      # paper source materials (pseudocode, prompts, diagrams)
 data/           # gitignored; runtime artifacts (SQLite, FAISS, transcripts)
 vendor/         # gitignored; pinned clone of google-deepmind/science-skills
 ```
 
+## Contributing
+
+Pull requests welcome. [`CONTRIBUTING.md`](CONTRIBUTING.md) covers the setup,
+what a good change looks like, and the three commands CI runs:
+
+```bash
+ruff check co_scientist scripts
+pytest co_scientist/tests/unit -q
+python scripts/validate_plugin.py
+```
+
+Every unit test runs offline, so you can work on this without a key.
+
+Security issues go through
+[private advisories](https://github.com/Kaimen-Inc/Co-Scientist/security/advisories/new),
+not public issues. See [`SECURITY.md`](SECURITY.md).
+
+## Citing this work
+
+If this repository is useful in published work, cite the paper it
+re-implements, and the repository if the implementation itself mattered.
+[`CITATION.cff`](CITATION.cff) has both in machine-readable form, and GitHub
+renders a ready-made citation from it in the sidebar.
+
+```bibtex
+@article{gottweis2026coscientist,
+  title   = {Towards an AI co-scientist},
+  author  = {Gottweis, Juraj and others},
+  journal = {Nature},
+  year    = {2026},
+  doi     = {10.1038/s41586-026-10644-y}
+}
+```
+
 ## License
 
-Apache-2.0.
+Apache-2.0. See [`LICENSE`](LICENSE).
+
+The paper, its prompts and its diagrams belong to their authors. This
+re-implementation is independent and unaffiliated.

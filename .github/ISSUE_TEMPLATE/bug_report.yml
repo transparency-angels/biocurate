@@ -1,0 +1,49 @@
+name: Bug report
+description: Something behaves differently from what the docs say.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Strip your API keys from anything you paste.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what happened, what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `co-scientist doctor`
+      description: This identifies the backend, the credentials state, and the embeddings path.
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: session
+    attributes:
+      label: Session id
+      description: If it happened during a run. Relevant lines from data/logs/session-<id>.jsonl help.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Session run (supervisor, agents, tournament)
+        - LLM backend or provider
+        - Agent Plugin, skills, or MCP server
+        - Web UI
+        - Bench
+        - Install or config
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "`co-scientist version`, plus your Python version and OS."
+    validations:
+      required: true

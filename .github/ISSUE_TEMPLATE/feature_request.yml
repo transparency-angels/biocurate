@@ -1,0 +1,24 @@
+name: Feature request
+description: Propose a change to how the system works.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that is hard or impossible now?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you propose
+    validations:
+      required: true
+  - type: textarea
+    id: paper
+    attributes:
+      label: Relationship to the paper
+      description: >-
+        This repo follows the architecture in Gottweis et al. If your proposal
+        diverges from it, say how. Divergence is fine when it is deliberate.
