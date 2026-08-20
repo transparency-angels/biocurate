@@ -6,7 +6,7 @@ message: >-
 type: software
 authors:
   - name: "Co-Scientist contributors"
-repository-code: "https://github.com/Kaimen-Inc/Co-Scientist"
+repository-code: "https://github.com/Ahmad-Jaradat-Space/Co-Scientist"
 license: Apache-2.0
 version: "0.1.0"
 keywords:

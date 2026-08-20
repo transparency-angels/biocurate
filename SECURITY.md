@@ -3,7 +3,7 @@
 ## Reporting a vulnerability
 
 Report privately through
-[GitHub Security Advisories](https://github.com/Kaimen-Inc/Co-Scientist/security/advisories/new).
+[GitHub Security Advisories](https://github.com/Ahmad-Jaradat-Space/Co-Scientist/security/advisories/new).
 Do not open a public issue for a vulnerability.
 
 Include what you did, what happened, and what you expected. A proof of concept

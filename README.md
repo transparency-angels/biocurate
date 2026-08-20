@@ -9,7 +9,7 @@ An open source re-implementation of Google's AI co-scientist
 [research blog](https://research.google/blog/accelerating-scientific-breakthroughs-with-an-ai-co-scientist/)),
 in Python, running on an API key **or** on your Claude Code / Codex subscription.
 
-[![tests](https://github.com/Kaimen-Inc/Co-Scientist/actions/workflows/test.yml/badge.svg)](https://github.com/Kaimen-Inc/Co-Scientist/actions/workflows/test.yml)
+[![tests](https://github.com/Ahmad-Jaradat-Space/Co-Scientist/actions/workflows/test.yml/badge.svg)](https://github.com/Ahmad-Jaradat-Space/Co-Scientist/actions/workflows/test.yml)
 [![Python 3.11 to 3.13](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)](pyproject.toml)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
 [![Agent Plugins 1.0](https://img.shields.io/badge/Agent%20Plugins-1.0-8A2BE2)](plugin/)
@@ -62,7 +62,7 @@ each entry, all in a local SQLite database you can query.
 ## Quickstart
 
 ```bash
-git clone https://github.com/Kaimen-Inc/Co-Scientist.git
+git clone https://github.com/Ahmad-Jaradat-Space/Co-Scientist.git
 cd Co-Scientist
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
@@ -119,6 +119,9 @@ The prompts as this repo uses them, with Jinja interpolation, are in
 > This is an independent re-implementation. It is not affiliated with Google or
 > with the paper's authors, and hypotheses it produces are a starting point for
 > a scientist, not a finding.
+>
+> The codebase originates from
+> [Kaimen-Inc/Co-Scientist](https://github.com/Kaimen-Inc/Co-Scientist).
 
 ## Contents
 
@@ -680,7 +683,7 @@ python scripts/validate_plugin.py
 Every unit test runs offline, so you can work on this without a key.
 
 Security issues go through
-[private advisories](https://github.com/Kaimen-Inc/Co-Scientist/security/advisories/new),
+[private advisories](https://github.com/Ahmad-Jaradat-Space/Co-Scientist/security/advisories/new),
 not public issues. See [`SECURITY.md`](SECURITY.md).
 
 ## Citing this work
