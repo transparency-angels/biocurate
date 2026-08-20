@@ -1,0 +1,19 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "co-scientist",
+  "version": "0.1.0",
+  "description": "Run the AI co-scientist multi-agent research engine from a coding agent: generate, review, rank by Elo tournament, evolve and synthesise scientific hypotheses.",
+  "author": {
+    "name": "Co-Scientist contributors"
+  },
+  "repository": "https://github.com/Kaimen-Inc/Co-Scientist",
+  "license": "Apache-2.0",
+  "keywords": [
+    "science",
+    "research",
+    "hypothesis-generation",
+    "multi-agent",
+    "literature-review",
+    "elo-tournament"
+  ]
+}

@@ -531,6 +531,30 @@ def serve(
     uvicorn.run(create_app(cfg), host=host, port=port, log_level="info")
 
 
+@app.command("mcp-server")
+def mcp_server(
+    ctx: typer.Context,
+    read_only: bool = typer.Option(
+        False, "--read-only",
+        help="Refuse session_start / session_resume. For shared or untrusted setups.",
+    ),
+) -> None:
+    """Serve the session MCP tools on stdio, for Claude Code, Codex, or any MCP client.
+
+    This is what `plugin/mcp.json` launches. Protocol traffic owns stdout, so
+    every diagnostic here goes to stderr.
+    """
+    import os
+
+    cfg, _ = ctx.obj
+    if read_only:
+        os.environ["COSCI_ALLOW_START"] = "0"
+
+    from .mcp.session_server import main as _serve
+
+    _serve(cfg)
+
+
 @app.command()
 def estimate(ctx: typer.Context) -> None:
     """Print the pre-flight cost estimate without launching a session."""

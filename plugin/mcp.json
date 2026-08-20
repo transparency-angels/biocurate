@@ -1,0 +1,11 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "co-scientist": {
+      "type": "stdio",
+      "command": "co-scientist",
+      "args": ["mcp-server"],
+      "env": {}
+    }
+  }
+}
