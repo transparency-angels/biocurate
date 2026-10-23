@@ -94,17 +94,17 @@ reserve    = 0.08
 #   claude_cli   either the anthropic ids above, or "opus" / "sonnet" / "haiku"
 #   codex_cli    Codex model ids your ChatGPT account is entitled to
 [models]
-parse_goal          = "anthropic/claude-sonnet-4-6"
-generation          = "anthropic/claude-opus-4-7"
-reflection          = "anthropic/claude-opus-4-7"
-evolution           = "anthropic/claude-opus-4-7"
-ranking_pairwise    = "anthropic/claude-sonnet-4-6"
-ranking_debate      = "anthropic/claude-sonnet-4-6"
-ranking_priority    = "anthropic/claude-opus-4-7"
-metareview_feedback = "anthropic/claude-sonnet-4-6"
-metareview_final    = "anthropic/claude-opus-4-7"
-classifier          = "anthropic/claude-haiku-4.5"
-judge               = "anthropic/claude-sonnet-4-6"
+parse_goal          = "gemini-4-argon"
+generation          = "gemini-4-argon"
+reflection          = "gemini-4-argon"
+evolution           = "gemini-4-argon"
+ranking_pairwise    = "gemini-4-argon"
+ranking_debate      = "gemini-4-argon"
+ranking_priority    = "gemini-4-argon"
+metareview_feedback = "gemini-4-argon"
+metareview_final    = "gemini-4-argon"
+classifier          = "gemini-4-argon"
+judge               = "gemini-4-argon"
 
 # Extended-reasoning budgets, in tokens. Only `provider = "anthropic"` sends
 # these as a real thinking budget. Under the default OpenRouter provider they
@@ -234,7 +234,7 @@ classifier_warn_categories = ["dual_use_bio"]
 # own key, including OPENROUTER_API_KEY. A stray one in your environment gets
 # sent to OpenRouter and rejected — unset it, or set only the preset's key.
 [llm]
-provider = "openrouter"
+provider = "gemini"
 
 [llm.claude_cli]
 binary = "claude"
