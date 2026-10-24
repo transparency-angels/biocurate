@@ -51,8 +51,8 @@ class ReflectionAgent(BaseAgent):
             hypothesis_text=quote_hypothesis(h.full_text, id_=h.id),
             articles_block=(
                 "Use the available search tools (web_search, pubmed_search, "
-                "arxiv_search, europe_pmc_search, web_fetch) to gather supporting "
-                "and contradicting evidence. Cite URLs that you actually fetched."
+                "arxiv_search, europe_pmc_search, search_library, web_fetch) to gather "
+                "supporting and contradicting evidence. Cite URLs that you actually fetched."
             ),
         )
 
@@ -87,6 +87,7 @@ class ReflectionAgent(BaseAgent):
                 self.deps.llm,
                 spec=spec, ctx=ctx,
                 registry=self.deps.tools,
+                db=self.deps.db,
                 max_iters=self.deps.cfg.tool_loop.reflection_max_iters,
                 parallel_cap=self.deps.cfg.tool_loop.parallel_cap,
                 tool_timeout_s=self.deps.cfg.tool_loop.tool_timeout_seconds,

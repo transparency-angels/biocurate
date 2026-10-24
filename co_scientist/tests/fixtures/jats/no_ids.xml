@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<article xmlns:xlink="http://www.w3.org/1999/xlink">
+  <front>
+    <journal-meta>
+      <journal-title-group><journal-title>Journal of Anchors</journal-title></journal-title-group>
+    </journal-meta>
+    <article-meta>
+      <article-id pub-id-type="pmcid">7654321</article-id>
+      <title-group><article-title>A paper without paragraph ids</article-title></title-group>
+      <pub-date pub-type="ppub"><year>2020</year></pub-date>
+      <abstract>
+        <p>First abstract paragraph.</p>
+        <p>Second abstract paragraph.</p>
+      </abstract>
+    </article-meta>
+  </front>
+  <body>
+    <p>Orphan paragraph directly in the body.</p>
+    <sec>
+      <title>Introduction</title>
+      <p>Intro paragraph one.</p>
+      <p>Intro paragraph two.</p>
+    </sec>
+    <sec>
+      <title>Results</title>
+      <p>Results lead paragraph.</p>
+      <sec>
+        <title>Subsection</title>
+        <p>Nested paragraph with <italic>emphasis</italic> and a citation <xref ref-type="bibr" rid="B1">1</xref>.</p>
+      </sec>
+      <table-wrap id="T9">
+        <label>Table 9</label>
+        <table><tbody><tr><td>x</td></tr></tbody></table>
+      </table-wrap>
+    </sec>
+  </body>
+  <back>
+    <ref-list><ref id="B1"><mixed-citation>Ref text.</mixed-citation></ref></ref-list>
+  </back>
+</article>

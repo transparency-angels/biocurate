@@ -126,6 +126,11 @@ class BenchOutcome:
 # --------------------------------------------------------------------------- #
 # Entry point
 
+ATLAS_UNSUPPORTED = (
+    "bench is SQLite-only; set storage.backend = \"sqlite\" (drop the Atlas config overlay)"
+)
+
+
 async def run_bench(
     base_cfg: Config,
     *,
@@ -141,6 +146,8 @@ async def run_bench(
     goldset: GoldSet | None = None,
 ) -> BenchOutcome:
     """Execute a bench. See module docstring for semantics."""
+    if base_cfg.storage.backend == "atlas":
+        raise ValueError(ATLAS_UNSUPPORTED)
     if not candidates:
         raise ValueError("bench needs at least one candidate")
     if len(candidates) < 2 and matches_per_pair > 0:

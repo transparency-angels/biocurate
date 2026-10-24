@@ -33,6 +33,7 @@ from typing import Any
 
 from ..ids import tool_run_id
 from ..logging import get_logger
+from ..storage import Conn
 from ..tools.base import ToolCtx
 from ..tools.registry import ToolRegistry
 from ..tools.urls import extract_urls
@@ -85,6 +86,7 @@ async def run_tool_loop(
     tool_timeout_s: float = 30.0,
     force_terminal_tool: str | None = None,
     terminal_tool_names: tuple[str, ...] = DEFAULT_TERMINAL_TOOLS,
+    db: Conn | None = None,
 ) -> ToolLoopResult:
     """Run one agent call to completion, driving turns if the backend doesn't.
 
@@ -113,6 +115,7 @@ async def run_tool_loop(
         tool_timeout_s=tool_timeout_s,
         force_terminal_tool=force_terminal_tool,
         terminal_tool_names=terminal_tool_names,
+        db=db,
     )
 
 
@@ -131,6 +134,7 @@ async def _run_driven(
     tool_timeout_s: float,
     force_terminal_tool: str | None,
     terminal_tool_names: tuple[str, ...],
+    db: Conn | None = None,
 ) -> ToolLoopResult:
     """Drive the assistant ↔ tool_use ↔ tool_result loop.
 
@@ -217,7 +221,7 @@ async def _run_driven(
 
         # Dispatch in parallel
         results = await asyncio.gather(
-            *(_dispatch(registry, tu, ctx, tool_timeout_s) for tu in tool_uses),
+            *(_dispatch(registry, tu, ctx, tool_timeout_s, db) for tu in tool_uses),
             return_exceptions=False,
         )
 
@@ -379,14 +383,18 @@ def _respec(spec: AgentCallSpec, **overrides: Any) -> AgentCallSpec:
 
 
 async def _dispatch(
-    registry: ToolRegistry, tool_use, ctx: CallContext, timeout_s: float
+    registry: ToolRegistry,
+    tool_use,
+    ctx: CallContext,
+    timeout_s: float,
+    db: Conn | None = None,
 ) -> dict[str, Any]:
     """Run one tool call. Returns a dict with content + is_error + duration."""
     t0 = time.monotonic()
     run_id = tool_run_id()
     tctx = ToolCtx(
         cfg=registry._cfg,
-        db=None,            # tools use their own write paths; DB writes go via repos
+        db=db,              # the agent's connection; only search_library reads it
         session_id=ctx.session_id,
         task_id=ctx.task_id,
         run_id=run_id,

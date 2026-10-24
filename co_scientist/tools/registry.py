@@ -12,6 +12,7 @@ from ..config import Config
 from .base import Tool, ToolCtx, ToolResult, to_anthropic_tool
 from .builtins.arxiv import ArxivSearchTool
 from .builtins.europe_pmc import EuropePMCSearchTool
+from .builtins.library import SearchLibraryTool
 from .builtins.pubmed import PubmedSearchTool
 from .science_skills import ScienceSkillTool, discover_skills
 from .web_fetch import WebFetchTool
@@ -28,12 +29,14 @@ AGENT_TOOLS: dict[str, set[str]] = {
     "generation": {
         "web_search", "web_fetch",
         "pubmed_search", "arxiv_search", "europe_pmc_search",
+        "search_library",  # inert unless storage.backend = "atlas"
         "literature_*",   # any science-skills literature_* tools
         "file_*",         # workspace folder, when configured
     },
     "reflection": {
         "web_search", "web_fetch",
         "pubmed_search", "arxiv_search", "europe_pmc_search",
+        "search_library",  # inert unless storage.backend = "atlas"
         "literature_*",
         "file_*",
         # code_exec wired in M2
@@ -42,6 +45,7 @@ AGENT_TOOLS: dict[str, set[str]] = {
     "evolution": {
         "web_search", "web_fetch",
         "pubmed_search", "arxiv_search", "europe_pmc_search",
+        "search_library",  # inert unless storage.backend = "atlas"
         "literature_*",
         "file_*",
     },
@@ -74,6 +78,9 @@ class ToolRegistry:
             or self._cfg.secrets.BRAVE_API_KEY or os.environ.get("BRAVE_API_KEY")
         ):
             self._register(WebSearchTool(self._cfg))
+        # The evidence library lives in Atlas; elsewhere the tool could only error.
+        if self._cfg.storage.backend == "atlas":
+            self._register(SearchLibraryTool())
         # Workspace file tools — only when a root is configured. Registering
         # them unconditionally would show every agent a folder that isn't
         # there, and they'd waste turns discovering it is empty.

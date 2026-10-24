@@ -13,10 +13,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 
-import aiosqlite
-
 from ..config import Config
 from ..models import Session
+from ..storage import Conn
+from ..storage.repos import hypotheses as hyp_repo
+from ..storage.repos import tournaments as tourney_repo
 
 
 class StopReason(Enum):
@@ -91,33 +92,15 @@ class StabilityTracker:
 
 
 async def snapshot_top_k(
-    conn: aiosqlite.Connection, session_id: str, k: int
+    conn: Conn, session_id: str, k: int
 ) -> EloSnapshot:
     """Read the current top-K leaderboard + count of completed matches + pool size."""
-    async with conn.execute(
-        """SELECT id, elo FROM hypotheses
-              WHERE session_id=? AND state IN ('in_tournament','pinned')
-                AND elo IS NOT NULL
-              ORDER BY elo DESC LIMIT ?""",
-        (session_id, k),
-    ) as cur:
-        rows = await cur.fetchall()
-    async with conn.execute(
-        "SELECT COUNT(*) AS n FROM tournament_matches WHERE session_id=? AND mode != 'invalid'",
-        (session_id,),
-    ) as cur:
-        mc_row = await cur.fetchone()
-    async with conn.execute(
-        """SELECT COUNT(*) AS n FROM hypotheses
-              WHERE session_id=? AND state IN ('in_tournament','pinned')""",
-        (session_id,),
-    ) as cur:
-        pool_row = await cur.fetchone()
+    rows = await hyp_repo.top_elo_ids(conn, session_id, k)
     return EloSnapshot(
-        match_count=mc_row["n"] if mc_row else 0,
-        top_ids=tuple(r["id"] for r in rows),
-        top_elos=tuple(r["elo"] for r in rows),
-        pool_size=pool_row["n"] if pool_row else 0,
+        match_count=await tourney_repo.count_matches(conn, session_id),
+        top_ids=tuple(hid for hid, _ in rows),
+        top_elos=tuple(elo for _, elo in rows),
+        pool_size=await hyp_repo.pool_size(conn, session_id),
     )
 
 

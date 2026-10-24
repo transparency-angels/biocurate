@@ -7,7 +7,6 @@ land in M3+. All commands resolve config the same way; secrets come from env.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import os
 from datetime import UTC, datetime
@@ -20,6 +19,9 @@ from rich.table import Table
 from .config import load_config
 from .logging import get_logger, setup_logging
 from .storage import db as db_mod
+from .storage.repos import hypotheses as hyp_repo
+from .storage.repos import sessions as sess_repo
+from .storage.repos import tasks as task_repo
 
 VERSION = "0.1.0"
 
@@ -30,6 +32,10 @@ app = typer.Typer(
 )
 tools_app = typer.Typer(help="Tool registry inspection and debug invocation.", no_args_is_help=True)
 app.add_typer(tools_app, name="tools")
+library_app = typer.Typer(
+    help="Evidence library (Europe PMC full text on Atlas).", no_args_is_help=True
+)
+app.add_typer(library_app, name="library")
 
 console = Console()
 log = get_logger("cli")
@@ -162,7 +168,6 @@ def doctor(ctx: typer.Context) -> None:
 
 def _check_mcp() -> tuple[bool, str]:
     """Run an initialize + tools/list handshake against our own MCP server."""
-    import json
     import subprocess
     import sys
     import tempfile
@@ -256,16 +261,7 @@ def list_sessions(ctx: typer.Context) -> None:
     async def _run() -> list[dict]:
         conn = await db_mod.connect(cfg)
         try:
-            async with conn.execute(
-                """SELECT id, status, research_goal, created_at, updated_at,
-                          budget_usd, budget_used_usd,
-                          (SELECT COUNT(*) FROM hypotheses WHERE session_id = s.id) AS n_hyps,
-                          (SELECT MAX(elo) FROM hypotheses WHERE session_id = s.id) AS top_elo
-                     FROM sessions s
-                     ORDER BY updated_at DESC"""
-            ) as cur:
-                rows = await cur.fetchall()
-            return [dict(r) for r in rows]
+            return await sess_repo.list_with_stats(conn)
         finally:
             await conn.close()
 
@@ -303,26 +299,11 @@ def status(ctx: typer.Context, session_id: str = typer.Argument(...)) -> None:
     async def _run() -> dict:
         conn = await db_mod.connect(cfg)
         try:
-            async with conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)) as cur:
-                row = await cur.fetchone()
-            if row is None:
+            out = await sess_repo.fetch_row(conn, session_id)
+            if out is None:
                 return {}
-            out = dict(row)
-            for col in ("research_plan", "config_snapshot"):
-                with contextlib.suppress(Exception):
-                    out[col] = json.loads(out[col])
-            async with conn.execute(
-                """SELECT status, COUNT(*) AS n FROM tasks
-                       WHERE session_id = ? GROUP BY status""",
-                (session_id,),
-            ) as cur:
-                out["task_counts"] = {r["status"]: r["n"] for r in await cur.fetchall()}
-            async with conn.execute(
-                """SELECT state, COUNT(*) AS n FROM hypotheses
-                       WHERE session_id = ? GROUP BY state""",
-                (session_id,),
-            ) as cur:
-                out["hypothesis_states"] = {r["state"]: r["n"] for r in await cur.fetchall()}
+            out["task_counts"] = await task_repo.count_by_status(conn, session_id)
+            out["hypothesis_states"] = await hyp_repo.count_by_state(conn, session_id)
             return out
         finally:
             await conn.close()
@@ -493,13 +474,10 @@ def report(
     async def _path() -> Path | None:
         conn = await db_mod.connect(cfg)
         try:
-            async with conn.execute(
-                "SELECT final_overview FROM sessions WHERE id = ?", (session_id,)
-            ) as cur:
-                row = await cur.fetchone()
-            if not row or not row["final_overview"]:
+            session = await sess_repo.fetch(conn, session_id)
+            if session is None or not session.final_overview:
                 return None
-            return cfg.data_dir / row["final_overview"]
+            return cfg.data_dir / session.final_overview
         finally:
             await conn.close()
 
@@ -648,6 +626,11 @@ def bench_cmd(
     """
     cfg, _ = ctx.obj
     from .bench import BenchCandidate, get_preset, run_bench
+    from .bench.runner import ATLAS_UNSUPPORTED
+
+    if cfg.storage.backend == "atlas":
+        console.print(f"[red]{ATLAS_UNSUPPORTED}[/red]")
+        raise typer.Exit(2)
 
     if preset and candidate:
         console.print("[red]--preset and --candidate are mutually exclusive[/red]")
@@ -814,6 +797,111 @@ def tools_list(ctx: typer.Context) -> None:
         ts = reg.tools_for(agent)
         tbl2.add_row(agent, str(len(ts)), ", ".join(sorted(patterns)) or "—")
     console.print(tbl2)
+
+
+def _require_atlas(cfg) -> None:
+    if cfg.storage.backend != "atlas":
+        console.print(
+            "[red]The evidence library needs the Atlas backend.[/red] "
+            'Set \\[storage] backend = "atlas" and MONGODB_URI.'
+        )
+        raise typer.Exit(1)
+
+
+@library_app.command("ingest")
+def library_ingest(
+    ctx: typer.Context,
+    query: str = typer.Argument(..., help="Europe PMC query; only OA full text is ingested."),
+    max_papers: int = typer.Option(10, "--max-papers", min=1, help="Papers to fetch."),
+) -> None:
+    """Fetch open-access full text for QUERY and store its passages in the library."""
+    cfg, _ = ctx.obj
+    _require_atlas(cfg)
+    from .library.ingest import ingest_query
+
+    async def _run():
+        await db_mod.init_db(cfg)  # ensures the library search indexes exist
+        conn = await db_mod.connect(cfg)
+        try:
+            return await ingest_query(conn, cfg, query, max_papers=max_papers)
+        finally:
+            await conn.close()
+
+    rep = asyncio.run(_run())
+    console.print(f"papers ingested: {rep.papers}")
+    console.print(f"passages stored: {rep.passages}")
+    console.print(f"already present: {', '.join(rep.already_present) or '-'}")
+    console.print(f"skipped (no full text / unparseable): {', '.join(rep.skipped) or '-'}")
+    console.print(f"failed (errors; safe to re-run): {'; '.join(rep.failed) or '-'}")
+
+
+@library_app.command("stats")
+def library_stats(ctx: typer.Context) -> None:
+    """Show the library passage count and the status of its search indexes."""
+    cfg, _ = ctx.obj
+    _require_atlas(cfg)
+    from .storage.atlas import library as lib_store
+    from .storage.atlas.indexes import SEARCH_INDEX_SPECS
+
+    async def _run():
+        conn = await db_mod.connect(cfg)
+        try:
+            n = await lib_store.count(conn)
+            cur = await conn.coll("library").list_search_indexes()
+            have = {d["name"]: d for d in await cur.to_list()}
+            return n, have
+        finally:
+            await conn.close()
+
+    n, have = asyncio.run(_run())
+    console.print(f"passages: {n}")
+    for spec in (s for s in SEARCH_INDEX_SPECS if s.collection == "library"):
+        d = have.get(spec.name)
+        if d is None:
+            console.print(f"index {spec.name}: missing (run `library ingest` to create)")
+        else:
+            console.print(
+                f"index {spec.name}: status={d.get('status')} queryable={d.get('queryable')}"
+            )
+
+
+@library_app.command("search")
+def library_search(
+    ctx: typer.Context,
+    query: str = typer.Argument(..., help="What to look for in the library."),
+    k: int = typer.Option(8, "--k", min=1, max=20, help="Passages to return."),
+    kind: str | None = typer.Option(
+        None, "--kind", help="Restrict to figure, table, paragraph or abstract."
+    ),
+) -> None:
+    """Hybrid (keyword + semantic) search of the library, reranked with Voyage."""
+    cfg, _ = ctx.obj
+    _require_atlas(cfg)
+    if kind not in (None, "figure", "table", "paragraph", "abstract"):
+        console.print("[red]--kind must be figure, table, paragraph or abstract.[/red]")
+        raise typer.Exit(1)
+    from .library.search import hybrid_search
+
+    async def _run():
+        conn = await db_mod.connect(cfg)
+        try:
+            return await hybrid_search(conn, cfg, query, k=k, kind=kind)
+        finally:
+            await conn.close()
+
+    hits = asyncio.run(_run())
+    tbl = Table(title=f"library: {query}")
+    for col in ("#", "anchor_id", "kind", "title", "fused", "rerank"):
+        tbl.add_column(
+            col,
+            justify="right" if col in ("#", "fused", "rerank") else "left",
+            overflow="fold" if col == "anchor_id" else "ellipsis",
+        )
+    for i, h in enumerate(hits, 1):
+        title = h.title if len(h.title) <= 50 else h.title[:49] + "…"
+        rr = "-" if h.rerank_score is None else f"{h.rerank_score:.3f}"
+        tbl.add_row(str(i), h.anchor_id, h.kind, title, f"{h.fused_score:.4f}", rr)
+    console.print(tbl)
 
 
 def main() -> None:  # pragma: no cover

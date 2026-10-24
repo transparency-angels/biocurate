@@ -10,7 +10,9 @@ emitted on the first call.
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -221,3 +223,94 @@ async def test_force_terminal_tool_on_final_iteration() -> None:
     # Earlier calls used the original auto tool_choice (no forcing).
     first_spec = client.call.await_args_list[0].args[0]
     assert first_spec.tool_choice != {"type": "tool", "name": "record_hypothesis"}
+
+
+# --------------------------------------------------------------------------- #
+# the agent's DB connection reaches the tools (search_library regression)
+
+
+class _CtxRecorder:
+    name = "probe"
+    description = "records the ToolCtx it is called with"
+    input_schema: ClassVar[dict] = {"type": "object", "properties": {}}
+
+    def __init__(self) -> None:
+        self.seen: list[object] = []
+
+    async def call(self, args, ctx):
+        from co_scientist.tools.base import ToolResult
+
+        self.seen.append(ctx.db)
+        return ToolResult(content={"ok": True}, duration_ms=1)
+
+
+def _probe_registry(tool) -> object:
+    from co_scientist.config import Config
+    from co_scientist.tools.registry import ToolRegistry
+
+    reg = ToolRegistry(Config())
+    reg._tools[tool.name] = tool
+    return reg
+
+
+def _tool_then_end(name: str, args: dict) -> AsyncMock:
+    return AsyncMock(side_effect=[
+        _fake_response(stop_reason="tool_use", blocks=[
+            {"type": "tool_use", "id": "c1", "name": name, "input": args},
+        ]),
+        _fake_response(stop_reason="end_turn", blocks=[{"type": "text", "text": "done"}]),
+    ])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("passed", [object(), None])
+async def test_run_tool_loop_passes_db_to_tools(passed) -> None:
+    tool = _CtxRecorder()
+    client = MagicMock()
+    client.call = _tool_then_end("probe", {})
+    kwargs = {} if passed is None else {"db": passed}
+    await run_tool_loop(
+        client, spec=_spec(), ctx=_ctx(), registry=_probe_registry(tool),
+        max_iters=4, **kwargs,
+    )
+    assert tool.seen == [passed]
+
+
+@pytest.mark.asyncio
+async def test_search_library_through_tool_loop_reaches_hybrid_search(monkeypatch) -> None:
+    from co_scientist.config import Config, StorageCfg
+    from co_scientist.library import search
+    from co_scientist.storage import AtlasConn
+    from co_scientist.storage.atlas import library as lib_store
+    from co_scientist.tools.registry import ToolRegistry
+
+    hit = search.LibraryHit(
+        anchor_id="PMC123#F2", pmcid="PMC123", title="T", section="Results", kind="figure",
+        label="Fig 2", text="TREM2 drives phagocytosis", url="https://x/PMC123", fused_score=0.5,
+    )
+    seen: dict = {}
+
+    async def fake_search(conn, cfg, query, *, k=8, kind=None):
+        seen["conn"] = conn
+        return [hit]
+
+    async def fake_count(conn):
+        return 399
+
+    monkeypatch.setattr(search, "hybrid_search", fake_search)
+    monkeypatch.setattr(lib_store, "count", fake_count)
+    conn = AtlasConn(client=None, db=None)  # type: ignore[arg-type]
+    registry = ToolRegistry(Config(storage=StorageCfg(backend="atlas"))).discover()
+    client = MagicMock()
+    client.call = _tool_then_end("search_library", {"query": "TREM2"})
+
+    result = await run_tool_loop(
+        client, spec=_spec(), ctx=_ctx(), registry=registry, max_iters=4, db=conn,
+    )
+    assert seen["conn"] is conn
+    (call,) = result.tool_calls
+    assert call["name"] == "search_library" and not call["is_error"]
+    sent = client.call.await_args_list[1].args[0]
+    block = sent.extra_messages[-1]["content"][0]
+    assert not block.get("is_error")
+    assert "PMC123#F2" in json.dumps(block, default=str)

@@ -11,7 +11,7 @@ import tomllib
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -35,6 +35,23 @@ class RunCfg(BaseModel):
 
 class StorageCfg(BaseModel):
     data_dir: str = "./data"
+    backend: Literal["sqlite", "atlas"] = "sqlite"
+    atlas_db: str = "biocurate"
+    atlas_prefix: str = ""
+    """Prepended to every collection name. Empty in production; tests set a
+    unique one so each run owns (and can drop) its own collections."""
+
+
+class LibraryCfg(BaseModel):
+    """Evidence library (anchored passages) retrieval settings."""
+
+    embedding: Literal["auto", "client"] = "auto"
+    """"auto" = Atlas autoEmbed index; "client" = embed passages with Voyage."""
+    embed_model: str = "voyage-4"
+    rerank_model: str = "rerank-2.5"
+    search_index: str = "library_text"
+    vector_index: str = "library_vec"
+    max_passage_chars: int = 2000
 
 
 class ScienceSkillsCfg(BaseModel):
@@ -77,6 +94,7 @@ class RankingCfg(BaseModel):
     p_new: float = 0.4
     p_close: float = 0.4
     p_random: float = 0.2
+    max_output_tokens: int = 8192
 
 
 class TerminationCfg(BaseModel):
@@ -385,11 +403,13 @@ class Secrets(BaseSettings):
     BRAVE_API_KEY: str = ""
     NCBI_API_KEY: str = ""
     OPENALEX_API_KEY: str = ""
+    MONGODB_URI: str = ""
 
 
 class Config(BaseModel):
     run: RunCfg = Field(default_factory=RunCfg)
     storage: StorageCfg = Field(default_factory=StorageCfg)
+    library: LibraryCfg = Field(default_factory=LibraryCfg)
     science_skills: ScienceSkillsCfg = Field(default_factory=ScienceSkillsCfg)
     embeddings: EmbeddingsCfg = Field(default_factory=EmbeddingsCfg)
     vectors: VectorsCfg = Field(default_factory=VectorsCfg)
@@ -410,6 +430,10 @@ class Config(BaseModel):
     llm: LLMCfg = Field(default_factory=LLMCfg)
     web_ui: WebUICfg = Field(default_factory=WebUICfg)
     secrets: Secrets = Field(default_factory=Secrets)
+
+    # Absolute path of the `-c` overlay this Config was loaded with. Private, so it
+    # never reaches model_dump() or the session's config_snapshot.
+    _overlay_path: Path | None = PrivateAttr(default=None)
 
     @property
     def data_dir(self) -> Path:
@@ -460,6 +484,8 @@ def load_config(extra_path: Path | None = None) -> Config:
             merged = _deep_merge(merged, _read_toml(p))
 
     cfg = Config.model_validate(merged)
+    if extra_path is not None:
+        cfg._overlay_path = Path(extra_path).resolve()
     # secrets pulled from env via Secrets() — already wired by default_factory above
     return cfg
 

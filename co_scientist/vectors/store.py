@@ -157,6 +157,27 @@ class FaissStore:
         async with self._lock:
             return await asyncio.to_thread(_do)
 
+    def ids(self) -> list[str]:
+        """Hypothesis ids in offset order (row order of `cosine_matrix`)."""
+        return list(self._ordered_ids)
+
+    def similarity(self, a_id: str, b_id: str) -> float | None:
+        """Cosine between two stored hypotheses (already L2-normalized).
+
+        Reconstructs only the two rows we need (O(2·dim)) — the previous
+        version called `reconstruct_n(0, n)` for every pair, materialising
+        the full N×dim matrix just to read two rows.
+        """
+        if self.index is None or self.n == 0:
+            return None
+        i = self.offset_of(a_id)
+        j = self.offset_of(b_id)
+        if i is None or j is None:
+            return None
+        vec_i = self.index.reconstruct(int(i))
+        vec_j = self.index.reconstruct(int(j))
+        return float(vec_i @ vec_j)
+
     def offset_of(self, hypothesis_id: str) -> int | None:
         return self._offset_by_id.get(hypothesis_id)
 

@@ -38,6 +38,7 @@ from ..storage.repos import feedback as fb_repo
 from ..storage.repos import hypotheses as hyp_repo
 from ..storage.repos import reviews as rev_repo
 from ..storage.repos import sessions as sess_repo
+from ..storage.repos import tournaments as tourney_repo
 from ..storage.repos import transcripts as tx_repo
 from .sanitize import render_markdown
 
@@ -334,19 +335,9 @@ def create_app(cfg: Config | None = None) -> FastAPI:
 async def _list_sessions(cfg: Config, *, limit: int = 50) -> list[dict[str, Any]]:
     conn = await db_mod.connect(cfg)
     try:
-        async with conn.execute(
-            """SELECT id, status, research_goal, created_at, updated_at,
-                      budget_usd, budget_used_usd,
-                      (SELECT COUNT(*) FROM hypotheses WHERE session_id = s.id) AS n_hyps,
-                      (SELECT MAX(elo) FROM hypotheses WHERE session_id = s.id) AS top_elo
-                 FROM sessions s
-                 ORDER BY updated_at DESC LIMIT ?""",
-            (limit,),
-        ) as cur:
-            rows = await cur.fetchall()
+        return await sess_repo.list_with_stats(conn, limit=limit)
     finally:
         await conn.close()
-    return [dict(r) for r in rows]
 
 
 def _env_row(cfg: Config) -> dict[str, Any]:
@@ -397,12 +388,12 @@ def _stages(session: Any, hypotheses: list[Any]) -> list[dict[str, str]]:
 
 
 async def _recent_matches(conn, session_id: str, *, limit: int) -> list[dict[str, Any]]:
-    async with conn.execute(
-        """SELECT id, hyp_a, hyp_b, mode, winner, elo_a_after, elo_b_after, created_at
-              FROM tournament_matches
-             WHERE session_id=?
-             ORDER BY created_at DESC LIMIT ?""",
-        (session_id, limit),
-    ) as cur:
-        rows = await cur.fetchall()
-    return [dict(r) for r in rows]
+    matches = await tourney_repo.list_for_session(conn, session_id, limit=limit)
+    return [
+        {
+            "id": m.id, "hyp_a": m.hyp_a, "hyp_b": m.hyp_b, "mode": m.mode,
+            "winner": m.winner, "elo_a_after": m.elo_a_after, "elo_b_after": m.elo_b_after,
+            "created_at": m.created_at.isoformat(),
+        }
+        for m in matches
+    ]

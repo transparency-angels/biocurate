@@ -10,7 +10,12 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-import aiosqlite
+from ..storage import Conn
+from ..storage.repos import events as events_repo
+from ..storage.repos import hypotheses as hyp_repo
+from ..storage.repos import tasks as task_repo
+from ..storage.repos import tournaments as tourney_repo
+from ..storage.repos import transcripts as tx_repo
 
 
 @dataclass
@@ -34,94 +39,44 @@ class SessionMetrics:
     dead_tasks: int = 0
 
 
-async def session_metrics(conn: aiosqlite.Connection, session_id: str) -> SessionMetrics:
+async def session_metrics(conn: Conn, session_id: str) -> SessionMetrics:
     out = SessionMetrics()
 
     # LLM usage (from transcripts)
-    async with conn.execute(
-        """SELECT
-              COUNT(*)                    AS n_calls,
-              COALESCE(SUM(input_tokens),0)  AS input_tokens,
-              COALESCE(SUM(output_tokens),0) AS output_tokens,
-              COALESCE(SUM(cache_read),0)    AS cache_read,
-              COALESCE(SUM(cache_write),0)   AS cache_write,
-              COALESCE(SUM(cost_usd),0.0)    AS cost_usd
-           FROM transcripts WHERE session_id=?""",
-        (session_id,),
-    ) as cur:
-        row = await cur.fetchone()
-    if row is not None:
-        out.n_calls = row["n_calls"]
-        out.input_tokens = row["input_tokens"]
-        out.output_tokens = row["output_tokens"]
-        out.cache_read = row["cache_read"]
-        out.cache_write = row["cache_write"]
-        out.cost_usd = float(row["cost_usd"])
+    usage = await tx_repo.usage_summary(conn, session_id)
+    if usage:
+        out.n_calls = usage["n_calls"]
+        out.input_tokens = usage["input_tokens"]
+        out.output_tokens = usage["output_tokens"]
+        out.cache_read = usage["cache_read"]
+        out.cache_write = usage["cache_write"]
+        out.cost_usd = float(usage["cost_usd"])
         denom = out.cache_read + out.cache_write + out.input_tokens
         if denom > 0:
             out.cache_hit_ratio = out.cache_read / denom
 
     # Matches
-    async with conn.execute(
-        """SELECT
-              SUM(CASE WHEN mode != 'invalid' THEN 1 ELSE 0 END) AS valid,
-              SUM(CASE WHEN mode  = 'invalid' THEN 1 ELSE 0 END) AS invalid
-           FROM tournament_matches WHERE session_id=?""",
-        (session_id,),
-    ) as cur:
-        row = await cur.fetchone()
-    if row is not None:
-        out.n_matches = row["valid"] or 0
-        out.n_invalid_matches = row["invalid"] or 0
+    by_mode = await tourney_repo.count_by_mode(conn, session_id)
+    out.n_invalid_matches = by_mode.get("invalid", 0)
+    out.n_matches = sum(n for mode, n in by_mode.items() if mode != "invalid")
 
     # Hypotheses
-    async with conn.execute(
-        """SELECT
-              COUNT(*) AS total,
-              SUM(CASE WHEN state IN ('in_tournament','pinned') THEN 1 ELSE 0 END) AS in_tournament,
-              SUM(CASE WHEN state IN ('reviewed','in_tournament','pinned') THEN 1 ELSE 0 END) AS reviewed
-           FROM hypotheses WHERE session_id=?""",
-        (session_id,),
-    ) as cur:
-        row = await cur.fetchone()
-    if row is not None:
-        out.n_hypotheses = row["total"] or 0
-        out.n_in_tournament = row["in_tournament"] or 0
-        out.n_reviewed = row["reviewed"] or 0
+    states = await hyp_repo.count_by_state(conn, session_id)
+    out.n_hypotheses = sum(states.values())
+    out.n_in_tournament = sum(states.get(s, 0) for s in ("in_tournament", "pinned"))
+    out.n_reviewed = sum(states.get(s, 0) for s in ("reviewed", "in_tournament", "pinned"))
 
-    # Latency P50/P95 from transcripts (rough approximation using
-    # finished_at - started_at parsed by SQLite's julianday function).
-    async with conn.execute(
-        """SELECT (strftime('%s', finished_at) - strftime('%s', started_at)) * 1000 AS dur_ms
-              FROM transcripts WHERE session_id=? ORDER BY dur_ms""",
-        (session_id,),
-    ) as cur:
-        durations = [r["dur_ms"] for r in await cur.fetchall() if r["dur_ms"] is not None]
+    # Latency P50/P95 from transcripts (whole-second resolution).
+    durations = await tx_repo.durations_ms(conn, session_id)
     if durations:
         out.p50_latency_ms = _percentile(durations, 0.50)
         out.p95_latency_ms = _percentile(durations, 0.95)
 
     # Tool calls + errors (from events)
-    async with conn.execute(
-        """SELECT
-              SUM(CASE WHEN event='tool_call' THEN 1 ELSE 0 END) AS tools_called,
-              SUM(CASE WHEN event='tool_call' AND payload LIKE '%"is_error": true%' THEN 1 ELSE 0 END) AS tool_errors
-           FROM events WHERE session_id=?""",
-        (session_id,),
-    ) as cur:
-        row = await cur.fetchone()
-    if row is not None:
-        out.tools_called = row["tools_called"] or 0
-        out.tool_errors = row["tool_errors"] or 0
+    out.tools_called, out.tool_errors = await events_repo.tool_call_counts(conn, session_id)
 
     # Dead-lettered tasks
-    async with conn.execute(
-        "SELECT COUNT(*) AS n FROM tasks WHERE session_id=? AND status='dead'",
-        (session_id,),
-    ) as cur:
-        row = await cur.fetchone()
-    if row is not None:
-        out.dead_tasks = row["n"]
+    out.dead_tasks = (await task_repo.count_by_status(conn, session_id)).get("dead", 0)
 
     return out
 
@@ -142,21 +97,14 @@ class LeaderboardEntry:
 
 
 async def leaderboard(
-    conn: aiosqlite.Connection, session_id: str, k: int = 10
+    conn: Conn, session_id: str, k: int = 10
 ) -> list[LeaderboardEntry]:
-    async with conn.execute(
-        """SELECT id, title, elo, matches_played FROM hypotheses
-              WHERE session_id=? AND state IN ('in_tournament','pinned')
-              ORDER BY elo DESC NULLS LAST LIMIT ?""",
-        (session_id, k),
-    ) as cur:
-        rows = await cur.fetchall()
+    hyps = await hyp_repo.top_by_elo(conn, session_id, k)
     return [
         LeaderboardEntry(
-            hypothesis_id=r["id"], title=r["title"], elo=r["elo"],
-            matches_played=r["matches_played"],
+            hypothesis_id=h.id, title=h.title, elo=h.elo, matches_played=h.matches_played,
         )
-        for r in rows
+        for h in hyps
     ]
 
 
@@ -165,7 +113,7 @@ _CACHE: dict[str, tuple[float, SessionMetrics]] = {}
 
 
 async def session_metrics_cached(
-    conn: aiosqlite.Connection, session_id: str, *, ttl_s: float = 1.0
+    conn: Conn, session_id: str, *, ttl_s: float = 1.0
 ) -> SessionMetrics:
     now = time.monotonic()
     hit = _CACHE.get(session_id)

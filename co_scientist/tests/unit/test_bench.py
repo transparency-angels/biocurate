@@ -373,3 +373,28 @@ async def test_run_bench_writes_summary_and_status(tmp_cfg) -> None:
     assert set(labels) == {"a", "b"}
     # Each candidate has its mean_elo populated.
     assert all(row["mean_elo"] is not None for row in outcome.candidates)
+
+
+async def test_run_bench_refuses_the_atlas_backend(tmp_cfg) -> None:
+    from co_scientist.bench import run_bench
+
+    tmp_cfg.storage.backend = "atlas"
+    with pytest.raises(ValueError, match="SQLite-only"):
+        await run_bench(tmp_cfg, goal="g", candidates=list(get_preset("claude-aml").candidates))
+
+
+def test_bench_cli_exits_cleanly_on_the_atlas_backend(tmp_cfg, capsys) -> None:
+    from types import SimpleNamespace
+
+    import typer
+
+    from co_scientist.cli import bench_cmd
+
+    tmp_cfg.storage.backend = "atlas"
+    ctx = SimpleNamespace(obj=(tmp_cfg, None))
+    # Call the command function directly: a CliRunner run would reconfigure structlog onto
+    # its captured stdout and break later tests once that stream closes.
+    with pytest.raises(typer.Exit) as e:
+        bench_cmd(ctx)
+    assert e.value.exit_code == 2
+    assert "SQLite-only" in capsys.readouterr().out

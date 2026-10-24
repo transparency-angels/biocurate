@@ -12,6 +12,8 @@ from pathlib import Path
 import aiosqlite
 
 from ..config import Config
+from .atlas.client import AtlasConn, connect_atlas
+from .atlas.indexes import ensure_indexes
 
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
@@ -25,7 +27,9 @@ async def _apply_pragmas(conn: aiosqlite.Connection) -> None:
     await conn.commit()
 
 
-async def connect(cfg: Config) -> aiosqlite.Connection:
+async def connect(cfg: Config) -> aiosqlite.Connection | AtlasConn:
+    if cfg.storage.backend == "atlas":
+        return await connect_atlas(cfg)
     cfg.db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = await aiosqlite.connect(cfg.db_path)
     conn.row_factory = aiosqlite.Row
@@ -34,8 +38,11 @@ async def connect(cfg: Config) -> aiosqlite.Connection:
 
 
 async def init_db(cfg: Config) -> None:
-    """Create the DB if missing and apply pending migrations."""
+    """Create the DB if missing and apply pending migrations (Atlas: indexes)."""
     conn = await connect(cfg)
+    if isinstance(conn, AtlasConn):
+        await ensure_indexes(conn, cfg)
+        return
     try:
         await _ensure_migrations_table(conn)
         await _apply_pending(conn)

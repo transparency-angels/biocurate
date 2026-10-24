@@ -48,8 +48,9 @@ from ..agents.schemas import (
     RECORD_SAFETY_ASSESSMENT_TOOL,
     RECORD_SYSTEM_FEEDBACK_TOOL,
 )
-from ..config import load_config
+from ..config import Secrets, load_config
 from ..ids import tool_run_id
+from ..storage.atlas import client as atlas_client
 from ..tools.base import ToolCtx
 from ..tools.registry import ToolRegistry
 from ..tools.urls import extract_urls
@@ -91,7 +92,11 @@ class CoScientistMcpServer:
         ]
         self.record_tools = {n: RECORD_TOOLS[n] for n in wanted if n in RECORD_TOOLS}
 
-        self.cfg = load_config()
+        overlay = os.environ.get("COSCI_CONFIG")
+        self.cfg = load_config(Path(overlay) if overlay else None)
+        if env_file := os.environ.get("COSCI_ENV_FILE"):
+            # Secrets only ever come from the file or the environment, never argv.
+            self.cfg.secrets = Secrets(_env_file=env_file)  # type: ignore[call-arg]
         self.registry = ToolRegistry(self.cfg).discover()
         self.research_tools = (
             {t.name: t for t in self.registry.tools_for(self.agent)} if self.agent else {}
@@ -99,6 +104,7 @@ class CoScientistMcpServer:
 
         self._seq = 0
         self._lock = asyncio.Lock()
+        self._atlas: Any = None  # AtlasConn, opened lazily on first research call
 
     # ----------------------------- tool list ----------------------------- #
 
@@ -148,11 +154,27 @@ class CoScientistMcpServer:
         _write_json(path, {"tool": name, "seq": seq, "input": args})
         return text_result(_RECORD_ACK)
 
+    async def _research_db(self) -> Any:
+        """Atlas connection for read-only tools (search_library); None on SQLite."""
+        if self.cfg.storage.backend != "atlas":
+            return None  # this process never writes SQLite
+        if self._atlas is None:
+            from ..storage.atlas.client import connect_atlas
+
+            self._atlas = await connect_atlas(self.cfg)
+        return self._atlas
+
     async def _handle_research(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         tool = self.research_tools[name]
+        try:
+            db = await self._research_db()
+        except Exception as e:
+            err = {"error": f"tool {name!r} failed: could not open Atlas ({type(e).__name__})"}
+            await self._log_tool_call(name, args, err, is_error=True, t0=time.monotonic())
+            return text_result(err, is_error=True)
         ctx = ToolCtx(
             cfg=self.cfg,
-            db=None,                 # this process never writes SQLite
+            db=db,
             session_id=self.session_id or None,
             task_id=self.task_id,
             run_id=tool_run_id(),
@@ -289,7 +311,10 @@ async def _amain() -> None:
         tools=server.tool_list(),
         handler=server.handle,
     )
-    await transport.serve()
+    try:
+        await transport.serve()
+    finally:
+        await atlas_client.shutdown_clients()
 
 
 def main() -> None:

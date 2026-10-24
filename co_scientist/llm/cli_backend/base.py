@@ -28,12 +28,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import aiosqlite
-
 from ...config import Config
 from ...ids import transcript_id
 from ...logging import get_logger
 from ...models import Transcript
+from ...storage import Conn
 from ...storage.artifacts import write_json
 from ...storage.repos import sessions as sessions_repo
 from ...storage.repos import transcripts as transcripts_repo
@@ -116,7 +115,7 @@ class AgentCliProvider(ABC):
         self,
         cfg: Config,
         *,
-        db: aiosqlite.Connection | None,
+        db: Conn | None,
         budget: TokenBudget,
         retry_policy: Any = None,       # accepted for call-site compatibility
     ) -> None:
@@ -406,22 +405,28 @@ class AgentCliProvider(ABC):
         """MCP server definition handed to the CLI."""
         import sys
 
+        env = {
+            "COSCI_CAPTURE_DIR": str(capture_dir),
+            "COSCI_RECORD_TOOLS": ",".join(record_tools),
+            "COSCI_AGENT": agent,
+            "COSCI_SESSION_ID": ctx.session_id,
+            "COSCI_TASK_ID": ctx.task_id or "",
+            "COSCI_TOOL_TIMEOUT": str(self._cfg.tool_loop.tool_timeout_seconds),
+        }
+        # The server runs in another cwd: hand it the parent's config overlay and
+        # the path (never the contents) of the .env the parent reads secrets from.
+        if self._cfg._overlay_path is not None:
+            env["COSCI_CONFIG"] = str(self._cfg._overlay_path)
+        if (env_file := Path.cwd() / ".env").is_file():
+            env["COSCI_ENV_FILE"] = str(env_file.resolve())
+
         return {
             "mcpServers": {
                 self.server_label: {
                     "command": sys.executable,
                     "args": ["-m", "co_scientist.mcp.server"],
                     "cwd": str(_package_root()),
-                    "env": {
-                        "COSCI_CAPTURE_DIR": str(capture_dir),
-                        "COSCI_RECORD_TOOLS": ",".join(record_tools),
-                        "COSCI_AGENT": agent,
-                        "COSCI_SESSION_ID": ctx.session_id,
-                        "COSCI_TASK_ID": ctx.task_id or "",
-                        "COSCI_TOOL_TIMEOUT": str(
-                            self._cfg.tool_loop.tool_timeout_seconds
-                        ),
-                    },
+                    "env": env,
                 }
             }
         }
