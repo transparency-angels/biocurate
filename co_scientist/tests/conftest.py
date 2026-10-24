@@ -4,10 +4,25 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import pytest_asyncio
 
-from co_scientist.config import Config, RunCfg, StorageCfg
+from co_scientist.config import Config, RunCfg, Secrets, StorageCfg
 from co_scientist.storage import db as db_mod
+
+
+@pytest.fixture(autouse=True)
+def _isolate_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the developer's real `.env` and shell secrets out of every test.
+
+    `Secrets` is a BaseSettings with `env_file=".env"`, and `make_embedder`
+    also reads `os.environ` directly, so both are neutralised. Tests that need
+    real credentials (tests/atlas) opt back in by building `Secrets` with an
+    explicit `_env_file`.
+    """
+    monkeypatch.setitem(Secrets.model_config, "env_file", None)
+    for name in Secrets.model_fields:
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest_asyncio.fixture
