@@ -96,7 +96,7 @@ class RankingAgent(BaseAgent):
         hyp_a, hyp_b, similarity = pair
 
         mode = self._select_mode(hyp_a, hyp_b)
-        verdict, rationale, transcript_id = await self._run_debate(
+        verdict, rationale, transcript_id, stop_reason = await self._run_debate(
             session, hyp_a, hyp_b, mode=mode
         )
         # Derive the round_id deterministically from the task id so that a
@@ -115,7 +115,9 @@ class RankingAgent(BaseAgent):
                 elo_a_before=hyp_a.elo or 1200.0, elo_b_before=hyp_b.elo or 1200.0,
                 rationale=rationale, transcript_id=transcript_id, similarity=similarity,
             ))
-            log.warning("ranking_invalid_verdict", a=hyp_a.id, b=hyp_b.id)
+            log.warning(
+                "ranking_invalid_verdict", a=hyp_a.id, b=hyp_b.id, stop_reason=stop_reason,
+            )
             return TaskResult(kind="noop", extra={"reason": "unparseable verdict"})
 
         # Compute the Elo update.
@@ -289,7 +291,7 @@ class RankingAgent(BaseAgent):
         b: Hypothesis,
         *,
         mode: PairMode,
-    ) -> tuple[Literal["a", "b"] | None, str, str | None]:
+    ) -> tuple[Literal["a", "b"] | None, str, str | None, str | None]:
         plan = session.research_plan
         # Anchor on the lower-ID hypothesis so cache hits cluster on it.
         anchor, opponent = (a, b) if a.id <= b.id else (b, a)
@@ -330,7 +332,7 @@ class RankingAgent(BaseAgent):
             user_blocks=[CachedBlock(prompt, cache=False)],
             tools=[],
             tool_choice=None,
-            max_output_tokens=2048,
+            max_output_tokens=self.deps.cfg.ranking.max_output_tokens,
             stop_sequences=None,
         )
         ctx = CallContext(
@@ -339,9 +341,10 @@ class RankingAgent(BaseAgent):
         )
         resp = await self.deps.llm.call(spec, ctx)
         text = self._final_text(resp)
+        stop_reason = getattr(resp.raw, "stop_reason", None)
         choice = _parse_better_idea(text)
         if choice is None:
-            return None, text, resp.transcript_id
+            return None, text, resp.transcript_id, stop_reason
 
         # Map anchor/opponent choice back to (a, b)
         # "1" means anchor, "2" means opponent.
@@ -349,7 +352,7 @@ class RankingAgent(BaseAgent):
             winner: Literal["a", "b"] = "a" if choice == 1 else "b"
         else:
             winner = "b" if choice == 1 else "a"
-        return winner, text, resp.transcript_id
+        return winner, text, resp.transcript_id, stop_reason
 
     async def _best_review(self, hypothesis_id: str) -> str | None:
         rs = await rev_repo.list_for_hypothesis(self.deps.db, hypothesis_id)

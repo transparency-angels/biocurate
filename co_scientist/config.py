@@ -94,6 +94,7 @@ class RankingCfg(BaseModel):
     p_new: float = 0.4
     p_close: float = 0.4
     p_random: float = 0.2
+    max_output_tokens: int = 8192
 
 
 class TerminationCfg(BaseModel):
