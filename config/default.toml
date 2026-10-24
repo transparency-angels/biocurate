@@ -18,6 +18,17 @@ budget_usd = 25.0
 
 [storage]
 data_dir = "./data"
+backend = "sqlite"                   # sqlite | atlas (atlas needs MONGODB_URI)
+atlas_db = "biocurate"
+atlas_prefix = ""                    # collection-name prefix; tests set a unique one
+
+[library]
+embedding = "auto"                   # auto = Atlas autoEmbed | client = embed with Voyage
+embed_model = "voyage-4"
+rerank_model = "rerank-2.5"
+search_index = "library_text"
+vector_index = "library_vec"
+max_passage_chars = 2000
 
 [science_skills]
 path = "./vendor/science-skills"

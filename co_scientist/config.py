@@ -35,6 +35,23 @@ class RunCfg(BaseModel):
 
 class StorageCfg(BaseModel):
     data_dir: str = "./data"
+    backend: Literal["sqlite", "atlas"] = "sqlite"
+    atlas_db: str = "biocurate"
+    atlas_prefix: str = ""
+    """Prepended to every collection name. Empty in production; tests set a
+    unique one so each run owns (and can drop) its own collections."""
+
+
+class LibraryCfg(BaseModel):
+    """Evidence library (anchored passages) retrieval settings."""
+
+    embedding: Literal["auto", "client"] = "auto"
+    """"auto" = Atlas autoEmbed index; "client" = embed passages with Voyage."""
+    embed_model: str = "voyage-4"
+    rerank_model: str = "rerank-2.5"
+    search_index: str = "library_text"
+    vector_index: str = "library_vec"
+    max_passage_chars: int = 2000
 
 
 class ScienceSkillsCfg(BaseModel):
@@ -385,11 +402,13 @@ class Secrets(BaseSettings):
     BRAVE_API_KEY: str = ""
     NCBI_API_KEY: str = ""
     OPENALEX_API_KEY: str = ""
+    MONGODB_URI: str = ""
 
 
 class Config(BaseModel):
     run: RunCfg = Field(default_factory=RunCfg)
     storage: StorageCfg = Field(default_factory=StorageCfg)
+    library: LibraryCfg = Field(default_factory=LibraryCfg)
     science_skills: ScienceSkillsCfg = Field(default_factory=ScienceSkillsCfg)
     embeddings: EmbeddingsCfg = Field(default_factory=EmbeddingsCfg)
     vectors: VectorsCfg = Field(default_factory=VectorsCfg)

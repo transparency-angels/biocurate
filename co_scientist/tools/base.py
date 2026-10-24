@@ -5,9 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
-import aiosqlite
-
 from ..config import Config
+from ..storage import Conn
 
 
 @dataclass
@@ -19,7 +18,7 @@ class ToolCtx:
     """
 
     cfg: Config
-    db: aiosqlite.Connection | None = None
+    db: Conn | None = None
     session_id: str | None = None
     task_id: str | None = None
     run_id: str | None = None       # ULID for this individual tool invocation
