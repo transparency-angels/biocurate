@@ -52,8 +52,7 @@ class ReflectionAgent(BaseAgent):
             articles_block=(
                 "Use the available search tools (web_search, pubmed_search, "
                 "arxiv_search, europe_pmc_search, search_library, web_fetch) to gather "
-                "supporting and contradicting evidence. Cite URLs that you actually fetched, "
-                "and the anchor_id (e.g. PMC1234567#F2) of any search_library passage."
+                "supporting and contradicting evidence. Cite URLs that you actually fetched."
             ),
         )
 

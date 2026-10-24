@@ -186,7 +186,7 @@ All of these are encoded in the existing code. Copy the patterns.
 
 ## 5. Evidence library (Atlas only)
 
-This is the "traceable evidence" part. The code is in `co_scientist/library/`
+This is the passage-level evidence store. The code is in `co_scientist/library/`
 and `co_scientist/storage/atlas/library.py`.
 
 ### Data model
@@ -259,7 +259,7 @@ From the command line: `co-scientist library search "<query>" --k 8 --kind figur
 
 `search_library` (`co_scientist/tools/builtins/library.py`) is registered only
 when `backend = "atlas"`. It is allowlisted for Generation, Reflection and
-Evolution. Their prompts tell them to cite the returned `anchor_id`.
+Evolution, and their prompts list it among the search tools.
 
 - **Input:** `{query, k (1–20, default 8), kind?}`.
 - **Output:** `{query, n, hits: [{anchor_id, pmcid, title, section, kind, label, text (≤800 chars), url, score, rerank_score}]}`.
@@ -350,26 +350,17 @@ searchable (text, vector, hybrid, rerank) and citable by agents through
 
 ### Exact citation location ("which line contributed")
 
-There is already a base to build on:
-- every library hit carries `anchor_id` plus the full passage `text`;
-- agents are told to cite the anchor;
-- `CitedPaper` (`co_scientist/models/hypothesis.py`) has `url` and an optional `excerpt`;
-- `Evidence` (`co_scientist/models/review.py`) has `claim`, `url` and `excerpt`.
+Citation tracing is owned by the citation-tracing work (`feature/cite-lines`).
+This branch does not change the citation models (`CitedPaper`, `Evidence`),
+`safety/citation_verifier.py`, or the prompts' citation rules.
 
-Suggested extension, so citations, the library and the UI share one shape:
-1. Add optional `anchor_id: str | None` and `char_start/char_end: int | None`
-   (or `sentence_index`) to `CitedPaper` and `Evidence`.
-2. When an agent quotes an excerpt from a `search_library` hit, resolve it to
-   offsets inside that passage's `text`. A normalised substring match is enough.
-3. `co_scientist/safety/citation_verifier.py` exists but is not wired in yet.
-   It checks that an excerpt appears at its URL, and can do the same against
-   the library passage (no fetch needed).
-4. The UI renders `url` (it already includes `#fragment`) and highlights
-   `text[char_start:char_end]`.
+What the library offers that work, if it wants it: every `search_library` hit
+has a stable `anchor_id`, the full passage `text`, and a `url` that already
+carries the `#fragment`.
 
-Citations are stored in the hypothesis/review JSON artifacts, not the DB rows.
-If the UI needs to query them, add a collection or table through a repo rather
-than parsing artifacts in the UI.
+Citations are stored in the hypothesis and review JSON artifacts, not in DB
+rows. If the UI needs to query them, add a collection or table through a repo
+(§4) rather than parsing artifacts in the UI.
 
 ---
 

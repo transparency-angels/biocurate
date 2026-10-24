@@ -76,7 +76,7 @@ Atlas cluster instead of local SQLite. SQLite stays the default.
 | **Atlas Vector Search** (`hyp_vec`) | Duplicate detection when a hypothesis is generated or evolved, and Ranking's pair similarity. `dotProduct` index with a `session_id` filter; falls back to exact in-memory search while the index is building or returns too few hits. | [`vectors/atlas_store.py`](co_scientist/vectors/atlas_store.py), [`vectors/factory.py`](co_scientist/vectors/factory.py) |
 | **Hybrid Search** (`$rankFusion`) | One aggregation fuses a `$search` branch and a text-query `$vectorSearch` branch (equal weights). | [`library/search.py`](co_scientist/library/search.py) (`build_hybrid_pipeline`) |
 | **Voyage AI** | `voyage-3-large` embeddings for hypotheses, `voyage-4` for library autoEmbed, and `rerank-2.5` over the fused hits (skipped without a key, and the fused order is kept). | [`vectors/embedder.py`](co_scientist/vectors/embedder.py), [`library/search.py`](co_scientist/library/search.py) (`rerank`) |
-| **`search_library` agent tool** | Generation, Reflection and Evolution call hybrid search and are told to cite the returned `anchor_id`. Inert unless the backend is `atlas`. | [`tools/builtins/library.py`](co_scientist/tools/builtins/library.py), [`tools/registry.py`](co_scientist/tools/registry.py) |
+| **`search_library` agent tool** | Generation, Reflection and Evolution can call it for hybrid search over the library. Inert unless the backend is `atlas`. | [`tools/builtins/library.py`](co_scientist/tools/builtins/library.py), [`tools/registry.py`](co_scientist/tools/registry.py) |
 
 Atlas Stream Processing is not used.
 
@@ -126,15 +126,13 @@ flowchart LR
 5. Check retrieval: `co-scientist library search "TREM2 and amyloid plaque compaction" --k 5` prints anchors with fused and rerank scores.
 6. Run a session as usual: `co-scientist run "<goal>" --n 3 --budget-usd 2.0`, and watch it with `co-scientist serve`.
 
-### Traceable evidence
+### Anchored passages
 
 Ingest fetches open-access full text from Europe PMC (JATS XML) and splits it
 into passages whose `_id` is an anchor: `PMC…#abstract.p1`, `PMC…#s2.p3` for a
 paragraph, `PMC…#F2` for a figure caption. Each passage is stored with a
-`url` of `https://europepmc.org/article/PMC/<pmcid>#<fragment>`. `search_library` returns
-that URL with every hit, so it enters the session's set of fetched URLs; a
-hypothesis citation whose URL is in that set survives the citation filter, and
-the citation list in the hypothesis page links to the exact passage or figure.
+`url` of `https://europepmc.org/article/PMC/<pmcid>#<fragment>`, and
+`search_library` returns the anchor, the URL and the passage text with every hit.
 
 ### Tests
 
