@@ -249,7 +249,6 @@ def test_final_prompt_instructs_line_level_citation_format() -> None:
 
     assert "[S#, L#-L#]" in prompt
 
-<<<<<<< HEAD
 
 def test_excerpt_to_bullets() -> None:
     excerpt = (
@@ -311,5 +310,3 @@ def test_format_sources_raw_includes_line_numbers_and_excerpts() -> None:
     assert "[L5] Induces Zfp414 transcription." in raw_log
 
 
-=======
->>>>>>> 58faad7beffc92b67b4fb54d393ae0e5cfcece79

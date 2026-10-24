@@ -34,12 +34,8 @@ What did the system not explore? Where was the literature thin? Where would a do
 
 Use markdown formatting. Cite hypothesis IDs as `[H-...]` inline.
 
-<<<<<<< HEAD
 Citations: cite sources with their source tag and line number(s) as `[S#, L#-L#]` (or `[S#, L#]`) inline, e.g. `[S1, L3-L5]` or `[S2, L12]`, referencing the line numbers (`[L#]`) from the consulted source excerpts/documents.
 
 Do not include a trailing `# Sources` section in this overview markdown document — literature sources, URLs, and excerpt logs are automatically extracted, structured, and presented via a separate dedicated sources view. Conclude your overview with `# Caveats and limitations`.
 
 **Use only URLs from the source list above — never invent one, and never cite a URL that is not listed.** If the list is empty, say so plainly and mark literature claims as requiring the scientist's verification.
-=======
-Citations: Every literature citation MUST be formatted as `[S#, L#-L#]` or `[S#, L#]` inline (e.g., `[S1, L3-L5]` or `[S2, L12]`). Bare source tags like `[S1]` or multi-source tags without line numbers (like `[S1, S5]`) are strictly forbidden — cite each source with its line range individually (e.g. `[S1, L3-L5][S5, L1-L4]`). Use the line numbers (`[L#]`) from the consulted source excerpts/documents above. Close with a `# Sources` section listing each `[S#]` tag you used with its full URL. **Use only URLs from the source list above — never invent one, and never cite a URL that is not listed.** If the list is empty, say so plainly and mark literature claims as requiring the scientist's verification.
->>>>>>> 58faad7beffc92b67b4fb54d393ae0e5cfcece79
