@@ -48,7 +48,7 @@ from ..agents.schemas import (
     RECORD_SAFETY_ASSESSMENT_TOOL,
     RECORD_SYSTEM_FEEDBACK_TOOL,
 )
-from ..config import load_config
+from ..config import Secrets, load_config
 from ..ids import tool_run_id
 from ..tools.base import ToolCtx
 from ..tools.registry import ToolRegistry
@@ -91,7 +91,11 @@ class CoScientistMcpServer:
         ]
         self.record_tools = {n: RECORD_TOOLS[n] for n in wanted if n in RECORD_TOOLS}
 
-        self.cfg = load_config()
+        overlay = os.environ.get("COSCI_CONFIG")
+        self.cfg = load_config(Path(overlay) if overlay else None)
+        if env_file := os.environ.get("COSCI_ENV_FILE"):
+            # Secrets only ever come from the file or the environment, never argv.
+            self.cfg.secrets = Secrets(_env_file=env_file)  # type: ignore[call-arg]
         self.registry = ToolRegistry(self.cfg).discover()
         self.research_tools = (
             {t.name: t for t in self.registry.tools_for(self.agent)} if self.agent else {}

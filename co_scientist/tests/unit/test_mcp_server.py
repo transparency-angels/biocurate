@@ -320,3 +320,35 @@ async def test_mcp_research_search_library_gets_atlas_conn(
 
 async def test_mcp_research_db_is_none_on_sqlite(server: CoScientistMcpServer) -> None:
     assert await server._research_db() is None
+
+
+async def test_mcp_server_loads_overlay_from_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    overlay = tmp_path / "atlas.toml"
+    overlay.write_text('[storage]\nbackend = "atlas"\n')
+    monkeypatch.setenv("COSCI_CONFIG", str(overlay))
+    monkeypatch.setenv("COSCI_CAPTURE_DIR", str(tmp_path / "cap"))
+    monkeypatch.setenv("COSCI_AGENT", "generation")
+    srv = CoScientistMcpServer()
+    assert srv.cfg.storage.backend == "atlas"
+    assert "search_library" in srv.research_tools
+
+    sentinel = object()
+
+    async def fake_connect(cfg: Any) -> object:
+        return sentinel
+
+    monkeypatch.setattr("co_scientist.storage.atlas.client.connect_atlas", fake_connect)
+    assert await srv._research_db() is sentinel
+
+
+def test_mcp_server_loads_secrets_from_env_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    envf = tmp_path / "my.env"
+    envf.write_text("MONGODB_URI=mongodb://example/x\n")
+    monkeypatch.delenv("MONGODB_URI", raising=False)
+    monkeypatch.setenv("COSCI_ENV_FILE", str(envf))
+    monkeypatch.setenv("COSCI_CAPTURE_DIR", str(tmp_path / "cap"))
+    assert CoScientistMcpServer().cfg.secrets.MONGODB_URI == "mongodb://example/x"

@@ -11,7 +11,7 @@ import tomllib
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -430,6 +430,10 @@ class Config(BaseModel):
     web_ui: WebUICfg = Field(default_factory=WebUICfg)
     secrets: Secrets = Field(default_factory=Secrets)
 
+    # Absolute path of the `-c` overlay this Config was loaded with. Private, so it
+    # never reaches model_dump() or the session's config_snapshot.
+    _overlay_path: Path | None = PrivateAttr(default=None)
+
     @property
     def data_dir(self) -> Path:
         p = Path(self.storage.data_dir)
@@ -479,6 +483,8 @@ def load_config(extra_path: Path | None = None) -> Config:
             merged = _deep_merge(merged, _read_toml(p))
 
     cfg = Config.model_validate(merged)
+    if extra_path is not None:
+        cfg._overlay_path = Path(extra_path).resolve()
     # secrets pulled from env via Secrets() — already wired by default_factory above
     return cfg
 
