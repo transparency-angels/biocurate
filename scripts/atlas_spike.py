@@ -99,39 +99,50 @@ async def check_autoembed(db) -> str:
 
 
 async def check_rank_fusion(db) -> str:
-    coll = db[PREFIX + "auto"]
+    """Independent of autoEmbed: own collection, plain `vector` index, 4-dim vectors."""
+    coll = db[PREFIX + "fusion"]
+    docs = [
+        {"text": t, "vec": [float(i % 2), float((i // 2) % 2), float(i % 3) / 2, 1.0]}
+        for i, (_, t) in enumerate(PASSAGES)
+    ]
+    await coll.insert_many(docs)
     await coll.create_search_index(
         SearchIndexModel(
-            definition={"mappings": {"dynamic": True}}, name="spike_text", type="search"
+            definition={"mappings": {"dynamic": True}}, name="spike_fusion_text", type="search"
         )
     )
-    if not await wait_for_search_index(coll, "spike_text", timeout_s=600, poll_s=10):
-        return "FAIL: search index never became queryable"
+    await coll.create_search_index(
+        SearchIndexModel(
+            definition={
+                "fields": [{"type": "vector", "path": "vec", "numDimensions": 4,
+                            "similarity": "cosine"}]
+            },
+            name="spike_fusion_vec",
+            type="vectorSearch",
+        )
+    )
+    for name in ("spike_fusion_text", "spike_fusion_vec"):
+        if not await wait_for_search_index(coll, name, timeout_s=600, poll_s=10):
+            return f"FAIL: index {name} never became queryable"
+    lexical = [
+        {"$search": {"index": "spike_fusion_text",
+                     "text": {"query": "kinase cancer", "path": "text"}}},
+        {"$limit": 10},
+    ]
+    semantic = [
+        {
+            "$vectorSearch": {
+                "index": "spike_fusion_vec",
+                "path": "vec",
+                "queryVector": [1.0, 0.0, 0.5, 1.0],
+                "numCandidates": 20,
+                "limit": 10,
+            }
+        }
+    ]
     cur = await coll.aggregate(
         [
-            {
-                "$rankFusion": {
-                    "input": {
-                        "pipelines": {
-                            "lexical": [
-                                {"$search": {"index": "spike_text", "text": {"query": "kinase cancer", "path": "text"}}},
-                                {"$limit": 10},
-                            ],
-                            "semantic": [
-                                {
-                                    "$vectorSearch": {
-                                        "index": "spike_auto",
-                                        "path": "text",
-                                        "query": {"text": QUERY},
-                                        "numCandidates": 20,
-                                        "limit": 10,
-                                    }
-                                }
-                            ],
-                        }
-                    }
-                }
-            },
+            {"$rankFusion": {"input": {"pipelines": {"lexical": lexical, "semantic": semantic}}}},
             {"$limit": 5},
             {"$project": {"_id": 0, "text": 1}},
         ]

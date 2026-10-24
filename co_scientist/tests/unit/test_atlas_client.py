@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from pymongo import AsyncMongoClient
+from pymongo.errors import CollectionInvalid, OperationFailure
 
 from co_scientist.config import Config, Secrets, StorageCfg
 from co_scientist.storage.atlas import client as client_mod
@@ -149,7 +152,9 @@ class _FakeConn:
 
 async def test_ensure_indexes_creates_only_missing_search_specs(monkeypatch):
     specs = [
-        idx.SearchIndexSpec("library", "have", "search", lambda cfg: {"mappings": {"dynamic": True}}),
+        idx.SearchIndexSpec(
+            "library", "have", "search", lambda cfg: {"mappings": {"dynamic": True}}
+        ),
         idx.SearchIndexSpec(
             "library", "need", "vectorSearch", lambda cfg: {"fields": [{"type": "vector"}]}
         ),
@@ -190,3 +195,50 @@ async def test_wait_for_search_index_true_when_queryable():
 
     coll.list_search_indexes = lsi
     assert await idx.wait_for_search_index(coll, "x", timeout_s=1, poll_s=0.01) is True
+
+
+def test_client_cache_never_returns_client_from_closed_loop():
+    seen: list = []
+
+    async def one():
+        before = set(map(id, (e[1] for e in client_mod._clients.values())))
+        conn = await connect_atlas(_atlas_cfg())
+        # created during this run, not left over from a dead loop
+        assert id(conn.client) not in before
+        assert len(client_mod._clients) == 1
+        loop, cached = client_mod._clients[URI]
+        assert loop is asyncio.get_running_loop() and cached is conn.client
+        seen.append(conn.client)
+
+    for _ in range(8):
+        asyncio.run(one())
+    assert len({id(c) for c in seen}) == 8  # holds refs, so ids cannot be reused
+
+
+class _RacyDB:
+    def __init__(self, exc):
+        self.exc = exc
+
+    name = "d"
+
+    async def list_collection_names(self):
+        return []
+
+    async def create_collection(self, name):
+        raise self.exc
+
+
+@pytest.mark.parametrize(
+    "exc", [CollectionInvalid("collection t_x already exists"), OperationFailure("x", code=48)]
+)
+async def test_ensure_collection_tolerates_lost_race(exc):
+    c = AsyncMongoClient("mongodb://localhost", connect=False)
+    conn = AtlasConn(client=c, db=_RacyDB(exc), prefix="t_")
+    await conn.ensure_collection("x")
+
+
+async def test_ensure_collection_reraises_other_errors():
+    c = AsyncMongoClient("mongodb://localhost", connect=False)
+    conn = AtlasConn(client=c, db=_RacyDB(OperationFailure("boom", code=13)), prefix="t_")
+    with pytest.raises(OperationFailure):
+        await conn.ensure_collection("x")
