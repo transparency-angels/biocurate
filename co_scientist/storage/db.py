@@ -17,11 +17,30 @@ SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
 
-async def _apply_pragmas(conn: aiosqlite.Connection) -> None:
-    await conn.execute("PRAGMA journal_mode=WAL;")
+def is_network_filesystem(path: Path) -> bool:
+    try:
+        import subprocess
+
+        out = subprocess.check_output(["df", "-T", str(path)], stderr=subprocess.DEVNULL, text=True)
+        fstype = out.strip().splitlines()[-1].split()[1].lower()
+        return any(net in fstype for net in ("nfs", "cifs", "smb", "lustre", "gpfs", "fuse"))
+    except Exception:
+        return False
+
+
+async def _apply_pragmas(conn: aiosqlite.Connection, db_path: Path | None = None) -> None:
+    # WAL mode requires POSIX shared-memory primitives (mmap / .shm locks).
+    # On network filesystems like NFS, WAL mode leads to SQLITE_NOTADB ("file is not a database")
+    # or concurrent locking errors. Use DELETE mode on NFS.
+    use_wal = True
+    if db_path is not None and is_network_filesystem(db_path):
+        use_wal = False
+
+    journal_mode = "WAL" if use_wal else "DELETE"
+    await conn.execute(f"PRAGMA journal_mode={journal_mode};")
     await conn.execute("PRAGMA synchronous=NORMAL;")
     await conn.execute("PRAGMA foreign_keys=ON;")
-    await conn.execute("PRAGMA busy_timeout=5000;")
+    await conn.execute("PRAGMA busy_timeout=30000;")
     await conn.commit()
 
 
@@ -29,7 +48,7 @@ async def connect(cfg: Config) -> aiosqlite.Connection:
     cfg.db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = await aiosqlite.connect(cfg.db_path)
     conn.row_factory = aiosqlite.Row
-    await _apply_pragmas(conn)
+    await _apply_pragmas(conn, cfg.db_path)
     return conn
 
 

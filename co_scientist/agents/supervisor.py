@@ -47,6 +47,7 @@ from ..orchestrator.termination import (
 )
 from ..storage import db as db_mod
 from ..storage.artifacts import write_text
+from ..storage.datasets import tabular_files
 from ..storage.repos import events as events_repo
 from ..storage.repos import feedback as fb_repo
 from ..storage.repos import hypotheses as hyp_repo
@@ -109,10 +110,12 @@ class Supervisor:
                 session = await sess_repo.fetch(conn, session.id)
                 assert session is not None
 
-                if plan.has_dataset or _detect_data_presence(goal, self.cfg.storage.data_dir):
-                    data_dir = self.cfg.storage.data_dir
+                if plan.has_dataset or _detect_data_presence(goal, str(self.cfg.data_dir)):
+                    data_dir = str(self.cfg.data_dir)
                     if plan.data_sources:
-                        p = Path(plan.data_sources[0])
+                        p = Path(plan.data_sources[0]).expanduser()
+                        if not p.exists() and not p.is_absolute():
+                            p = self.cfg.data_dir / p
                         if p.is_file():
                             data_dir = str(p.parent)
                         elif p.is_dir():
@@ -235,13 +238,13 @@ class Supervisor:
                     break
         if record is None:
             log.warning("parse_goal_no_record", note="falling back to bare ResearchPlan")
-            has_data = _detect_data_presence(goal, self.cfg.storage.data_dir)
+            has_data = _detect_data_presence(goal, str(self.cfg.data_dir))
             return ResearchPlan(
                 objective=goal.strip(), preferences=[], idea_attributes=[], has_dataset=has_data
             )
         has_dataset = bool(record.get("has_dataset", False))
         if not has_dataset:
-            has_dataset = _detect_data_presence(goal, self.cfg.storage.data_dir)
+            has_dataset = _detect_data_presence(goal, str(self.cfg.data_dir))
         return ResearchPlan(
             objective=record.get("objective", goal.strip()),
             preferences=record.get("preferences", []),
@@ -688,10 +691,5 @@ def _detect_data_presence(goal: str, data_dir_str: str) -> bool:
     keywords = ["dataset", "attached", "metadata", "biomarker", "patient_metadata", "treatment response", "study metadata"]
     if any(k in goal_lower for k in keywords):
         return True
-    p = Path(data_dir_str)
-    if p.is_dir():
-        for name in ("patient_metadata.txt", "cell2mutation_labeled.txt", "pfs_months.txt"):
-            if (p / name).is_file():
-                return True
-    return False
+    return bool(tabular_files(Path(data_dir_str).expanduser()))
 

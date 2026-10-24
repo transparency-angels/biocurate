@@ -17,6 +17,8 @@ budget_tokens = 5_000_000
 budget_usd = 25.0
 
 [storage]
+# Flat research inputs (.csv, .tsv, tab-delimited .txt) are discovered here.
+# co_scientist.db in this folder is internal session state, not an input dataset.
 data_dir = "./data"
 
 [science_skills]

@@ -251,6 +251,39 @@ co-scientist run "Identify hypotheses about microbiome-driven inflammation" \
 
 This kicks off Generation → Reflection → Ranking → Evolution → Meta-review under the configured backend. The Supervisor schedules tasks, the Elo tournament refines a leaderboard, and the final research overview is written to `data/artifacts/<session_id>/final/overview.md`.
 
+For data-driven research, place flat `.csv` files directly in `./data` (or the
+directory set by `[storage] data_dir`). Dataset detection discovers CSV, TSV,
+and tab-delimited TXT files; it never reads SQLite as a research input. Relative
+`data_dir` settings resolve from the project root, consistently with run storage.
+The application still uses `co_scientist.db` internally for sessions and its task
+queue; no database import or conversion is needed for research tables.
+
+The biomarker profiler expects a clinical table such as `patient_metadata.csv`
+or `metadata.csv`; other filenames are recognized by their headers. Include
+`SAMPLE_ID` (also `PATIENT_ID`, `sample`, or `id`), `DRUG` or `TREATMENT`, and
+`OS_MONTHS` (also `PFS_MONTHS`, `survival_months`, or `time`). Optional status
+columns include `OS_STATUS`, `PFS_STATUS`, `vital_status`, `status`, and `event`.
+Headers are case-insensitive. For alteration screening, add files with
+`mutation`, `amplification`, or `deletion` in the filename, e.g. `mutations.csv`.
+Each matrix has sample IDs in its first column, gene names in the remaining
+headers, and binary `0`/`1` values. Sample IDs must match the clinical table.
+Existing TSV and TXT layouts remain supported.
+
+To rerun the biomarker statistics separately from a research session:
+
+```bash
+python scripts/validate_data_analysis.py --data-dir ./data \
+  --reference data/artifacts/<session_id>/data_analysis/biomarker_candidates.json \
+  --output-dir ./data/validation
+```
+
+This needs no LLM, API key, or SQLite database. It writes a methods-rich summary,
+every eligible comparison to `statistical_tests.csv`, and `validation.json`
+with field-by-field differences from the stored results. Exit code 0 means a
+match; 1 means a mismatch. Omit `--reference` for a fresh analysis and optionally
+repeat `--drug NAME` to choose treatment arms. See [statistical methods and validation](docs/DATA_ANALYSIS.md)
+for the exact significance rule, data-handling policies, and limitations.
+
 ```bash
 co-scientist serve            # FastAPI + htmx + SSE dashboard at localhost:7878
 co-scientist report <id>      # print the final overview
