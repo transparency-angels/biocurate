@@ -27,10 +27,11 @@ from ..tools.web_fetch import WebFetchTool
 log = get_logger("safety.citation_verifier")
 
 _WS_RE = re.compile(r"\s+")
+_LINE_NUM_RE = re.compile(r"\[(?:s\d+,\s*)?l\d+(?:\s*-\s*l?\d+)?\]\s*", re.IGNORECASE)
 
 
 def _normalize(s: str) -> str:
-    return _WS_RE.sub(" ", s.lower()).strip()
+    return _WS_RE.sub(" ", _LINE_NUM_RE.sub("", s).lower()).strip()
 
 
 class CitationVerifier:

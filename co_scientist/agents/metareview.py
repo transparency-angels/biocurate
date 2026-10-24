@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -159,6 +160,7 @@ class MetaReviewAgent(BaseAgent):
                         title=str(c["title"]), url=str(c["url"]),
                         excerpt=c.get("excerpt"), doi=c.get("doi"),
                         year=c.get("year") if isinstance(c.get("year"), int) else None,
+                        line_range=c.get("line_range"),
                     ))
             hyps_out.append(h.model_copy(update={"citations": cites}))
 
@@ -172,10 +174,62 @@ class MetaReviewAgent(BaseAgent):
                         claim=str(e.get("claim", "")),
                         url=str(e["url"]),
                         excerpt=str(e.get("excerpt", "")),
+                        line_range=e.get("line_range"),
                     ))
             reviews_out.append(r.model_copy(update={"evidence": evidence}))
 
         return hyps_out, reviews_out
+
+    _CITATION_RE = re.compile(
+        r"\[S(\d+)(?:,\s*L(\d+)(?:\s*-\s*(?:L)?(\d+))?)?\]",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def extract_citations(cls, text: str) -> list[dict[str, Any]]:
+        """Parse citations matching [S#, L#-L#] or [S#, L#] or [S#] from text.
+
+        Returns a list of dicts with keys:
+          - 'raw': e.g. '[S1, L3-L5]'
+          - 'source': e.g. 'S1'
+          - 'source_idx': 1
+          - 'start_line': 3 (or None)
+          - 'end_line': 5 (or None)
+          - 'line_range': 'L3-L5' (or None)
+        """
+        citations: list[dict[str, Any]] = []
+        for m in cls._CITATION_RE.finditer(text):
+            source_idx = int(m.group(1))
+            start = int(m.group(2)) if m.group(2) else None
+            end = int(m.group(3)) if m.group(3) else start
+            line_str = None
+            if start is not None:
+                line_str = f"L{start}-L{end}" if start != end else f"L{start}"
+            citations.append({
+                "raw": m.group(0),
+                "source": f"S{source_idx}",
+                "source_idx": source_idx,
+                "start_line": start,
+                "end_line": end,
+                "line_range": line_str,
+            })
+        return citations
+
+    @staticmethod
+    def _extract_line_range(text: str) -> str | None:
+        """Extract a line number or line range (e.g. 'L3-L5' or 'L12') from text."""
+        if not text:
+            return None
+        nums = [int(n) for n in re.findall(r"\[L(\d+)\]", text, re.IGNORECASE)]
+        if nums:
+            min_l, max_l = min(nums), max(nums)
+            return f"L{min_l}-L{max_l}" if min_l != max_l else f"L{min_l}"
+        m = re.search(r"\[?L(\d+)(?:\s*-\s*(?:L)?(\d+))\]?", text, re.IGNORECASE)
+        if m:
+            start = int(m.group(1))
+            end = int(m.group(2)) if m.group(2) else start
+            return f"L{start}-L{end}" if start != end else f"L{start}"
+        return None
 
     @staticmethod
     def _source_block(hypotheses: list, reviews: list, *, limit: int = 40) -> str:
@@ -193,26 +247,43 @@ class MetaReviewAgent(BaseAgent):
         for h in hypotheses:
             for c in getattr(h, "citations", []) or []:
                 url = getattr(c, "url", "")
-                if url and url not in seen:
+                if not url:
+                    continue
+                excerpt = getattr(c, "excerpt", "") or ""
+                lr = getattr(c, "line_range", None) or MetaReviewAgent._extract_line_range(excerpt)
+                if url not in seen:
                     seen[url] = {
                         "title": getattr(c, "title", "") or "(untitled)",
-                        "excerpt": getattr(c, "excerpt", "") or "",
+                        "excerpt": excerpt,
+                        "line_range": lr,
                         "refs": [],
                     }
-                if url:
-                    seen[url]["refs"].append(h.id)
+                else:
+                    if not seen[url]["excerpt"] and excerpt:
+                        seen[url]["excerpt"] = excerpt
+                    if not seen[url]["line_range"] and lr:
+                        seen[url]["line_range"] = lr
+                seen[url]["refs"].append(h.id)
 
         for r in reviews:
             for ev in getattr(r, "evidence", []) or []:
                 url = getattr(ev, "url", "")
                 if not url:
                     continue
+                excerpt = getattr(ev, "excerpt", "") or ""
+                lr = getattr(ev, "line_range", None) or MetaReviewAgent._extract_line_range(excerpt)
                 if url not in seen:
                     seen[url] = {
                         "title": getattr(ev, "claim", "") or "(claim)",
-                        "excerpt": getattr(ev, "excerpt", "") or "",
+                        "excerpt": excerpt,
+                        "line_range": lr,
                         "refs": [],
                     }
+                else:
+                    if not seen[url]["excerpt"] and excerpt:
+                        seen[url]["excerpt"] = excerpt
+                    if not seen[url]["line_range"] and lr:
+                        seen[url]["line_range"] = lr
                 seen[url]["refs"].append(r.hypothesis_id)
 
         if not seen:
@@ -221,7 +292,9 @@ class MetaReviewAgent(BaseAgent):
         lines: list[str] = []
         for i, (url, meta) in enumerate(list(seen.items())[:limit], start=1):
             refs = ", ".join(dict.fromkeys(meta["refs"]))[:120]
-            line = f"- [S{i}] {meta['title'][:200]}\n  {url}"
+            line_range = meta.get("line_range") or MetaReviewAgent._extract_line_range(meta["excerpt"])
+            line_info = f" (lines: {line_range})" if line_range else ""
+            line = f"- [S{i}] {meta['title'][:200]}{line_info}\n  {url}"
             if meta["excerpt"]:
                 line += f'\n  > "{meta["excerpt"][:300]}"'
             if refs:
@@ -308,10 +381,21 @@ class MetaReviewAgent(BaseAgent):
         if not text.strip():
             text = "# Research overview\n\n_(No content was generated; see transcripts.)_"
 
+        citations = self.extract_citations(text)
+        log.info(
+            "final_overview_citations",
+            n_citations=len(citations),
+            line_level=sum(1 for c in citations if c["line_range"] is not None),
+        )
+
         overview_path = await write_text(
             self.deps.cfg, session.id, "final", "overview", ".md", text
         )
         return TaskResult(
             kind="final_overview_generated",
-            extra={"overview_path": overview_path, "n_top": len(top)},
+            extra={
+                "overview_path": overview_path,
+                "n_top": len(top),
+                "citations": citations,
+            },
         )

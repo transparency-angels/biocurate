@@ -41,11 +41,12 @@ RECORD_HYPOTHESIS_TOOL: dict[str, Any] = {
                 "items": {
                     "type": "object",
                     "properties": {
-                        "url":     {"type": "string"},
-                        "title":   {"type": "string"},
-                        "excerpt": {"type": "string", "description": "Verbatim short quote from the source."},
-                        "doi":     {"type": "string"},
-                        "year":    {"type": "integer"},
+                        "url":        {"type": "string"},
+                        "title":      {"type": "string"},
+                        "excerpt":    {"type": "string", "description": "Verbatim short quote from the source, preserving line numbers like [L1] when available."},
+                        "line_range": {"type": "string", "description": "Optional line range cited from the source, e.g. L3-L5 or L12."},
+                        "doi":        {"type": "string"},
+                        "year":       {"type": "integer"},
                     },
                     "required": ["url", "title"],
                 },
@@ -115,9 +116,10 @@ RECORD_REVIEW_TOOL: dict[str, Any] = {
                 "items": {
                     "type": "object",
                     "properties": {
-                        "claim":   {"type": "string"},
-                        "url":     {"type": "string"},
-                        "excerpt": {"type": "string"},
+                        "claim":      {"type": "string"},
+                        "url":        {"type": "string"},
+                        "excerpt":    {"type": "string", "description": "Verbatim quote, preserving line numbers like [L1] when available."},
+                        "line_range": {"type": "string", "description": "Optional line range, e.g. L3-L5 or L12."},
                     },
                     "required": ["claim", "url", "excerpt"],
                 },

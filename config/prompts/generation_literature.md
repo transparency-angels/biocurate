@@ -21,4 +21,4 @@ Existing hypothesis (if applicable):
 Literature review and analytical rationale (chronologically ordered, beginning with the most recent analysis):
 {{ articles_with_reasoning }}
 
-When you are ready, call the `record_hypothesis` tool with your final answer. The tool's `statement` field is the one-sentence hypothesis; `mechanism` is the detailed causal story; `entities` lists specific named actors; `anticipated_outcomes` describes what would be observed if true; `novelty_argument` explains what is new relative to the cited work; `citations` must reference articles you actually read above (URL + excerpt for each).
+When you are ready, call the `record_hypothesis` tool with your final answer. The tool's `statement` field is the one-sentence hypothesis; `mechanism` is the detailed causal story; `entities` lists specific named actors; `anticipated_outcomes` describes what would be observed if true; `novelty_argument` explains what is new relative to the cited work; `citations` must reference articles you actually read above (URL + excerpt with line numbers like `[L#]` for each).
