@@ -51,7 +51,7 @@ def test_rejects_too_many_and_too_large_and_bad_extension():
     cfg.max_file_mb = 1
     with pytest.raises(IntakeError) as e:
         accept_uploads([("big.txt", b"0" * (1024 * 1024 + 1), "")], cfg)
-    assert e.value.status_code in (400, 413)
+    assert e.value.status_code == 400
     with pytest.raises(IntakeError) as e:
         accept_uploads([("bad.zip", b"not a zip", "")], AttachmentsCfg())
     assert e.value.status_code == 400
@@ -101,9 +101,114 @@ def test_unzip_rejects_traversal_bomb_and_member_flood():
         accept_uploads([("l.zip", bytes(raw), "")], cfg)
     # zipfile stops at the declared size and then fails its CRC check, so a
     # lying header is rejected (never expanded past the limit) as unreadable.
-    assert e.value.status_code in (400, 413)
+    assert e.value.status_code == 400
 
     flood = _zip({f"f{i}.csv": b"1" for i in range(51)})
     with pytest.raises(IntakeError) as e:
         accept_uploads([("f.zip", flood, "")], AttachmentsCfg())
     assert e.value.status_code == 413
+
+
+def _zip_with(name: str, data: bytes, comp: int) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", comp) as zf:
+        zf.writestr(name, data)
+    return buf.getvalue()
+
+
+def _corrupt(raw: bytes, marker: bytes = b"PK\x03\x04") -> bytes:
+    """Garble the compressed payload right after the first local header."""
+    b = bytearray(raw)
+    i = b.find(marker)
+    n = struct.unpack("<H", b[i + 26 : i + 28])[0] + struct.unpack("<H", b[i + 28 : i + 30])[0]
+    start = i + 30 + n
+    for k in range(start, min(start + 40, len(b) - 100)):
+        b[k] = 0xFF
+    return bytes(b)
+
+
+def test_encrypted_member_skipped_with_reason():
+    raw = bytearray(_zip({"s.csv": b"1,2"}))
+    for sig, off in ((b"PK\x03\x04", 6), (b"PK\x01\x02", 8)):
+        i = raw.find(sig)
+        raw[i + off] |= 0x1
+    res = accept_uploads([("e.zip", bytes(raw), "")], AttachmentsCfg())
+    assert res.files == []
+    assert res.skipped == ["s.csv: encrypted"]
+
+
+def test_corrupt_bzip2_lzma_and_eof_map_to_400():
+    body = bytes(range(256)) * 400
+    for comp in (zipfile.ZIP_BZIP2, zipfile.ZIP_LZMA):
+        res = accept_uploads([("z.zip", _zip_with("a.csv", body, comp), "")], AttachmentsCfg())
+        assert res.files == [] and res.skipped == ["a.csv: unsupported compression"]
+    stored = bytearray(_zip_with("a.csv", b"1,2,3", zipfile.ZIP_STORED))
+    for sig, off in ((b"PK\x03\x04", 18), (b"PK\x01\x02", 20)):
+        i = stored.find(sig)
+        stored[i + off : i + off + 8] = struct.pack("<II", 2**30, 2**30)
+    bad = [bytes(stored), _corrupt(_zip_with("a.csv", body, zipfile.ZIP_DEFLATED))]
+    for raw in bad:
+        with pytest.raises(IntakeError) as e:
+            accept_uploads([("z.zip", raw, "")], AttachmentsCfg())
+        assert e.value.status_code == 400
+        assert "could not be read as a zip archive" in str(e.value)
+
+
+def test_budget_is_per_request_across_zips_and_plain_files():
+    cfg = AttachmentsCfg(max_unzipped_mb=1)
+    blob = b"a" * (900 * 1024)
+    with pytest.raises(IntakeError) as e:
+        accept_uploads(
+            [("a.zip", _zip({"a.csv": blob}), ""), ("b.zip", _zip({"b.csv": blob}), "")], cfg
+        )
+    assert e.value.status_code == 413
+    with pytest.raises(IntakeError) as e:
+        accept_uploads([("a.csv", blob, ""), ("b.zip", _zip({"b.csv": blob}), "")], cfg)
+    assert e.value.status_code == 413
+
+
+def test_member_cap_is_per_request():
+    z = _zip({f"f{i}.csv": b"1" for i in range(30)})
+    with pytest.raises(IntakeError) as e:
+        accept_uploads([("a.zip", z, ""), ("b.zip", z, "")], AttachmentsCfg())
+    assert e.value.status_code == 413
+
+
+def test_central_directory_flood_is_413():
+    flood = _zip({f"{i}.x": b"" for i in range(1001)})
+    with pytest.raises(IntakeError) as e:
+        accept_uploads([("f.zip", flood, "")], AttachmentsCfg())
+    assert e.value.status_code == 413
+    assert "too many entries" in str(e.value)
+
+
+def test_skipped_list_is_capped():
+    z = _zip({f"{i}.x": b"" for i in range(200)})
+    res = accept_uploads([("f.zip", z, "")], AttachmentsCfg())
+    assert len(res.skipped) == 51
+    assert res.skipped[-1] == "...and 150 more"
+
+
+def test_duplicate_names_across_request_get_suffixes():
+    z = _zip({"c.csv": b"1"})
+    res = accept_uploads(
+        [("c.csv", b"0", ""), ("a.zip", z, ""), ("b.zip", z, ""), ("c.csv", b"2", "")],
+        AttachmentsCfg(max_files=5),
+    )
+    assert [f.filename for f in res.files] == ["c.csv", "c (2).csv", "c (3).csv", "c (4).csv"]
+
+
+def test_safe_name_strips_drive_letters_and_control_chars():
+    res = accept_uploads(
+        [("C:evil.csv", b"1", ""), ("a\x00b.csv", b"1", ""), ("..\\..\\w.txt", b"1", "")],
+        AttachmentsCfg(),
+    )
+    assert [f.filename for f in res.files] == ["evil.csv", "ab.csv", "w.txt"]
+    res = accept_uploads(
+        [("m.zip", _zip({"C:x.csv": b"1", "dir/__MACOSX/y.csv": b"1", "..": b"1"}), "")],
+        AttachmentsCfg(),
+    )
+    assert [f.filename for f in res.files] == ["x.csv"]
+    with pytest.raises(IntakeError) as e:
+        accept_uploads([(".hidden.csv", b"1", "")], AttachmentsCfg())
+    assert e.value.status_code == 400

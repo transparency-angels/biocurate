@@ -386,7 +386,7 @@ class AttachmentsCfg(BaseModel):
     max_file_mb: int = 25
     max_unzipped_mb: int = 512
     max_zip_members: int = 50
-    max_session_mb: int = 125
+    max_session_mb: int = 512
     max_total_mb: int = 2048
 
 

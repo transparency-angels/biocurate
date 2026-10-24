@@ -20,4 +20,4 @@ def test_attachments_cfg_defaults() -> None:
     for cfg in (Config(), load_config()):
         a = cfg.attachments
         assert (a.max_files, a.max_file_mb, a.max_unzipped_mb) == (5, 25, 512)
-        assert (a.max_zip_members, a.max_session_mb, a.max_total_mb) == (50, 125, 2048)
+        assert (a.max_zip_members, a.max_session_mb, a.max_total_mb) == (50, 512, 2048)
