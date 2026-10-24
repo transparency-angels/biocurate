@@ -78,7 +78,12 @@ class DatasetProfiler:
         self.top_curves: dict[str, dict[str, Any]] = {}
         self.data_handling: dict[str, Any] = {}
         self.endpoint: dict[str, str] = {}
+        # Per-sample points are held only for contenders for the reported list: the
+        # best alteration per (biomarker, drug), at most MAX_CANDIDATES in all.
         self.points: dict[str, list[dict[str, Any]]] = {}
+        self.peak_points = 0
+        self._contenders: dict[str, tuple[float, int, tuple[str, str]]] = {}
+        self._seq = 0
 
     def profile(
         self, data_dir: Path, *, goal: str = "", target_drugs: list[str] | None = None,
@@ -90,6 +95,9 @@ class DatasetProfiler:
         self.matrix_paths = {}
         self.top_curves = {}
         self.points = {}
+        self.peak_points = 0
+        self._contenders = {}
+        self._seq = 0
         self.data_handling = {"matrix_screens": {}}
         metadata_path = self._find_metadata_file(data_dir)
         if metadata_path is None:
@@ -249,6 +257,36 @@ class DatasetProfiler:
                 unique.append(candidate)
         return unique[:MAX_CANDIDATES]
 
+    def _offer_points(
+        self, test: dict[str, Any], altered_s: list[str], altered_t: list[float],
+        unaltered_s: list[str], unaltered_t: list[float],
+    ) -> None:
+        """Keep points only while the test can still reach the reported candidates.
+
+        Mirrors `_screen_alterations`: keep the lowest p-value per (biomarker, drug),
+        first seen on ties, then the MAX_CANDIDATES lowest overall (latest evicted on ties).
+        """
+        key, p_value = test["candidate_key"], test["p_value"]
+        group = (test["biomarker"], test["drug"])
+        self._seq += 1
+        rival = next((k for k, v in self._contenders.items() if v[2] == group), None)
+        if rival is not None:
+            if p_value >= self._contenders[rival][0]:
+                return
+            del self._contenders[rival], self.points[rival]
+        self._contenders[key] = (p_value, self._seq, group)
+        self.points[key] = [
+            {"sample_id": sid, "group": name, "value": value}
+            for name, ids, values in (
+                ("altered", altered_s, altered_t), ("unaltered", unaltered_s, unaltered_t),
+            )
+            for sid, value in zip(ids, values, strict=True)
+        ]
+        self.peak_points = max(self.peak_points, len(self.points))
+        if len(self._contenders) > MAX_CANDIDATES:
+            worst = max(self._contenders, key=lambda k: self._contenders[k][:2])
+            del self._contenders[worst], self.points[worst]
+
     def _find_matrix_file(self, data_dir: Path, patterns: list[str]) -> Path | None:
         paths = tabular_files(data_dir)
         return next((path for pattern in patterns for path in paths if fnmatchcase(path.name.lower(), pattern.lower())), None)
@@ -329,13 +367,7 @@ class DatasetProfiler:
             self.tests.append(test)
             if test["nominally_significant"]:
                 candidates.append(test)
-                self.points[test["candidate_key"]] = [
-                    {"sample_id": sid, "group": name, "value": value}
-                    for name, ids, values in (
-                        ("altered", altered_s, altered_t), ("unaltered", unaltered_s, unaltered_t),
-                    )
-                    for sid, value in zip(ids, values, strict=True)
-                ]
+                self._offer_points(test, altered_s, altered_t, unaltered_s, unaltered_t)
                 existing = self.top_curves.get(gene)
                 if existing is None or p_value < existing["association"]["p_value"]:
                     self.top_curves[gene] = {"association": test, "altered": _curve_data(altered_km), "unaltered": _curve_data(unaltered_km)}
