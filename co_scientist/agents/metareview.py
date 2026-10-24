@@ -25,6 +25,7 @@ from ..models import SystemFeedback, Task, TaskResult
 from ..models.hypothesis import CitedPaper
 from ..models.review import Evidence
 from ..storage.artifacts import write_json
+from ..storage.repos import analysis as analysis_repo
 from ..storage.repos import feedback as fb_repo
 from ..storage.repos import hypotheses as hyp_repo
 from ..storage.repos import reviews as rev_repo
@@ -584,16 +585,8 @@ class MetaReviewAgent(BaseAgent):
 
     async def _dataset_summary(self, session_id: str) -> str:
         """Load the separate empirical report as context for literature synthesis."""
-        base = self.deps.cfg.data_dir.resolve()
-        path = (self.deps.cfg.session_artifact_dir(session_id) / "data_analysis" / "summary.md").resolve()
-        try:
-            path.relative_to(base)
-        except ValueError:
-            return ""
-        try:
-            return await asyncio.to_thread(path.read_text, encoding="utf-8")
-        except OSError:
-            return ""
+        report = await analysis_repo.fetch_report(self.deps.db, session_id)
+        return (report or {}).get("summary_markdown", "")
 
     async def _final_overview(self, task: Task) -> TaskResult:
         session = await sess_repo.fetch(self.deps.db, task.session_id)

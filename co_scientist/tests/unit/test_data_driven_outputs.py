@@ -19,6 +19,8 @@ from co_scientist.models import Hypothesis, ResearchPlan, Session
 from co_scientist.orchestrator.termination import StopReason
 from co_scientist.storage import db as db_mod
 from co_scientist.storage.artifacts import write_text
+from co_scientist.storage.repos import analysis as analysis_repo
+from co_scientist.storage.repos import blobs
 from co_scientist.storage.repos import hypotheses as hyp_repo
 from co_scientist.storage.repos import sessions as sess_repo
 from co_scientist.storage.repos import tasks as task_repo
@@ -76,8 +78,9 @@ async def test_data_driven_session_writes_both_reports(tmp_cfg, monkeypatch: pyt
         assert profile_task.agent == "data_analysis"
         result = await DataAnalysisAgent(deps).execute(profile_task)
         assert result.extra["methods"]["primary_test"] == "lifelines.statistics.logrank_test"
-        summary_path = tmp_cfg.session_artifact_dir(session.id) / "data_analysis" / "summary.md"
-        captured["summary"] = summary_path.read_bytes()
+        assert result.extra["artifact_path"] is None
+        stored = await analysis_repo.fetch_report(conn, session.id)
+        captured["summary"] = stored["summary_markdown"]
         await supervisor._apply_follow_ups(conn, session, profile_task, result)
         await task_repo.complete(conn, profile_task.id)
 
@@ -95,9 +98,7 @@ async def test_data_driven_session_writes_both_reports(tmp_cfg, monkeypatch: pyt
     monkeypatch.setattr(supervisor, "_main_loop", profile_and_generate)
     session_id = await supervisor.run_session("Find biomarkers in the dataset")
     root = tmp_cfg.session_artifact_dir(session_id)
-    assert (root / "data_analysis" / "summary.md").read_bytes() == captured["summary"]
-    assert (root / "data_analysis" / "statistical_tests.csv").is_file()
-    assert (root / "data_analysis" / "plots" / "kaplan_meier_1.png").read_bytes().startswith(b"\x89PNG")
+    assert not (root / "data_analysis").exists()
     # The meta-review writes its overview into final/synthesis.json (cite-lines);
     # the simple fallback overview below is still final/overview.md.
     synthesis = json.loads((root / "final" / "synthesis.json").read_text())
@@ -118,6 +119,10 @@ async def test_data_driven_session_writes_both_reports(tmp_cfg, monkeypatch: pyt
 
     conn = await db_mod.connect(tmp_cfg)
     try:
+        report = await analysis_repo.fetch_report(conn, session_id)
+        assert report["summary_markdown"] == captured["summary"]
+        (plot,) = report["plots"]
+        assert (await blobs.get(conn, "plots", plot["blob_id"])).startswith(b"\x89PNG")
         session = await sess_repo.fetch(conn, session_id)
         assert session.status == "done"
         assert tmp_cfg.data_dir / session.final_overview == root / "final" / "synthesis.json"

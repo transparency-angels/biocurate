@@ -144,16 +144,24 @@ async def test_sources_are_hydrated_from_artifacts_not_db_rows(tmp_cfg) -> None:
     assert "https://evidence.example" in block
 
 
-async def test_hydration_refuses_paths_outside_the_data_dir(tmp_cfg) -> None:
+async def test_hydration_refuses_paths_outside_the_data_dir(tmp_cfg, conn) -> None:
     from co_scientist.agents.base import AgentDeps
 
-    agent = MetaReviewAgent(AgentDeps(cfg=tmp_cfg, db=None, llm=None, tools=None))
+    agent = MetaReviewAgent(AgentDeps(cfg=tmp_cfg, db=conn, llm=None, tools=None))
 
     assert await agent._read_record("../../etc/passwd") == {}
     assert await agent._read_record(None) == {}
     assert await agent._read_record("artifacts/does-not-exist.json") == {}
-    assert await agent._dataset_summary("../../../../outside") == ""
     assert await agent._dataset_summary("no_such_session") == ""
+
+
+async def test_dataset_summary_reads_the_stored_report(tmp_cfg, conn) -> None:
+    from co_scientist.agents.base import AgentDeps
+    from co_scientist.storage.repos import analysis as analysis_repo
+
+    agent = MetaReviewAgent(AgentDeps(cfg=tmp_cfg, db=conn, llm=None, tools=None))
+    await analysis_repo.save_report(conn, "ses_sum", {"summary_markdown": "# Dataset\n"})
+    assert await agent._dataset_summary("ses_sum") == "# Dataset\n"
 
 
 def test_final_prompt_renders_sources_and_forbids_inventing_urls() -> None:
