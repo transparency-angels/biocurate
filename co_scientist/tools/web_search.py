@@ -45,6 +45,12 @@ class WebSearchTool:
     def __init__(self, cfg: Config) -> None:
         self._cfg = cfg
 
+    def _add_line_numbers(self, text: str) -> str:
+        """Helper function: Prepends line numbers to each line of text."""
+        if not text:
+            return ""
+        return "\n".join(f"[L{i+1}] {line}" for i, line in enumerate(text.splitlines()))
+
     async def call(self, args: dict[str, Any], ctx: ToolCtx) -> ToolResult:
         t0 = time.monotonic()
         query = args.get("query", "").strip()
@@ -102,7 +108,7 @@ class WebSearchTool:
                 {
                     "title": hit.get("title", ""),
                     "url": hit.get("url", ""),
-                    "snippet": hit.get("content", ""),
+                    "snippet": self._add_line_numbers(hit.get("content", "")),
                     "published_at": hit.get("published_date"),
                     "score": hit.get("score"),
                 }
@@ -125,7 +131,7 @@ class WebSearchTool:
                 {
                     "title": hit.get("title", ""),
                     "url": hit.get("url", ""),
-                    "snippet": hit.get("description", ""),
+                    "snippet": self._add_line_numbers(hit.get("description", "")),
                     "published_at": hit.get("age"),
                 }
             )
