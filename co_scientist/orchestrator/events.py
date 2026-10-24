@@ -20,7 +20,8 @@ from typing import Any
 
 @dataclass
 class Event:
-    name: str                              # e.g. "match_complete", "hypothesis_created"
+    # e.g. "match_complete", "hypothesis_created", "timeline_message"
+    name: str
     session_id: str
     payload: dict[str, Any] = field(default_factory=dict)
     ts_ms: int = field(default_factory=lambda: int(time.time() * 1000))

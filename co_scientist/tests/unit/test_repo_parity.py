@@ -10,7 +10,7 @@ import pytest
 MODULES = [
     "attachments", "blobs", "embeddings", "events", "feedback", "hypotheses",
     "reviews",
-    "sessions", "spans", "tasks", "tournaments", "transcripts",
+    "sessions", "spans", "tasks", "timeline", "tournaments", "transcripts",
 ]
 
 

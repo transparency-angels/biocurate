@@ -144,6 +144,9 @@ BTREE_INDEXES: dict[str, list[IndexModel]] = {
             unique=True,
         ),
     ],
+    "timeline": [
+        IndexModel([("session_id", _A), ("seq", _A)], name="timeline_sess_seq", unique=True)
+    ],
 }
 
 
@@ -158,6 +161,7 @@ async def ensure_indexes(conn: AtlasConn, cfg: Config) -> None:
         await conn.coll(name).create_indexes(models)
     # Pre-create so the first Elo transaction does not implicitly create it.
     await conn.ensure_collection("elo_journal")
+    await conn.ensure_collection("timeline_counters")
 
     by_coll: dict[str, list[SearchIndexSpec]] = {}
     for spec in SEARCH_INDEX_SPECS:
