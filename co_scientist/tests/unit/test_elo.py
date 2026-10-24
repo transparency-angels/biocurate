@@ -98,3 +98,37 @@ async def test_record_match_result_is_idempotent(conn) -> None:
     assert hy.elo == pytest.approx(1184.0)
     assert hx.matches_played == 1
     assert hy.matches_played == 1
+
+
+@pytest.mark.asyncio
+async def test_record_match_result_failed_begin_does_not_roll_back_others(conn) -> None:
+    """A failed BEGIN IMMEDIATE must not roll back another writer's open transaction."""
+    now = datetime.now(UTC)
+    await conn.execute(
+        """INSERT INTO sessions(id, created_at, updated_at, status, research_goal,
+                                 research_plan, config_snapshot, budget_tokens, budget_usd)
+           VALUES ('ses_t', ?, ?, 'running', 'test', '{}', '{}', 1000000, 10.0)""",
+        (now.isoformat(), now.isoformat()),
+    )
+    await conn.commit()
+    for hid in ("hyp_x", "hyp_y"):
+        await hyp_repo.insert(conn, Hypothesis(
+            id=hid, session_id="ses_t", created_at=now,
+            created_by="generation", strategy="literature",
+            title="t", summary="s", full_text="f",
+            artifact_path=f"artifacts/ses_t/hypotheses/{hid}.json",
+            elo=1200, matches_played=0, state="in_tournament",
+        ))
+
+    # "Another coroutine" opens an implicit transaction and has not committed yet.
+    await conn.execute("UPDATE hypotheses SET title='other-writer' WHERE id='hyp_y'")
+
+    with pytest.raises(Exception):  # noqa: B017 - BEGIN IMMEDIATE inside an open transaction
+        await tourney_repo.record_match_result(
+            conn, match_id="m_nobegin", hyp_a="hyp_x", hyp_b="hyp_y", winner="a",
+            k_new=32, k_warm=16, initial_elo=1200.0,
+        )
+
+    await conn.commit()  # the other writer's later commit
+    hy = await hyp_repo.fetch(conn, "hyp_y")
+    assert hy is not None and hy.title == "other-writer"

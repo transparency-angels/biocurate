@@ -39,9 +39,10 @@ async def insert_match(conn: aiosqlite.Connection, m: TournamentMatch) -> bool:
     return ok
 
 
-# One writer at a time per connection: BEGIN IMMEDIATE cannot nest, and concurrent tasks
-# sharing a connection would otherwise interleave their statements. Other connections are
-# serialized by SQLite's write lock (BEGIN IMMEDIATE).
+# Serialises record_match_result calls on one connection (BEGIN IMMEDIATE cannot nest).
+# It does NOT isolate them from other writers sharing the connection: those use implicit
+# transactions without this lock and can still interleave with, or join, our transaction.
+# That predates this function. Other connections are serialized by SQLite's write lock.
 _WRITE_LOCKS: weakref.WeakKeyDictionary[aiosqlite.Connection, asyncio.Lock] = (
     weakref.WeakKeyDictionary()
 )
@@ -64,11 +65,15 @@ async def record_match_result(
     in between the read and the write. Returns None if the journal already has this
     match_id (re-run; nothing written). Raises ValueError if a hypothesis is missing.
     """
-    lock = _WRITE_LOCKS.setdefault(conn, asyncio.Lock())
+    lock = _WRITE_LOCKS.get(conn)
+    if lock is None:
+        lock = _WRITE_LOCKS[conn] = asyncio.Lock()
     async with lock:
         applied_at = int(time.time() * 1000)
+        began = False
         try:
             await conn.execute("BEGIN IMMEDIATE")
+            began = True
             cur_elo: dict[str, tuple[float, int]] = {}
             for hid in (hyp_a, hyp_b):
                 async with conn.execute(
@@ -104,10 +109,13 @@ async def record_match_result(
             await conn.commit()
         except aiosqlite.IntegrityError:
             # match_id already in journal — idempotent skip.
-            await conn.rollback()
+            if began:
+                await conn.rollback()
             return None
         except BaseException:
-            await conn.rollback()
+            # A failed BEGIN leaves someone else's transaction open; don't roll it back.
+            if began:
+                await conn.rollback()
             raise
     return AppliedElo(
         elo_a_before=elo_a, elo_b_before=elo_b,
