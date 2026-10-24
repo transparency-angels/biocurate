@@ -583,19 +583,68 @@ async def test_events_recent(any_conn) -> None:
     assert other[0]["payload"] is None and other[0]["task_id"] is None
 
 
+async def _read_span(conn, span_id: str) -> dict:
+    """Backend-specific read of one span: {attrs, status, started_at, ended_at}."""
+    from co_scientist.storage.atlas.client import AtlasConn
+
+    if isinstance(conn, AtlasConn):
+        d = await conn.coll("spans").find_one({"_id": span_id})
+        assert d is not None
+        return {k: d[k] for k in ("attrs", "status", "started_at", "ended_at")}
+    async with conn.execute(
+        "SELECT attrs_json, status, started_at, ended_at FROM spans WHERE span_id=?",
+        (span_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    assert row is not None
+    return {
+        "attrs": json.loads(row["attrs_json"]),
+        "status": row["status"],
+        "started_at": row["started_at"],
+        "ended_at": row["ended_at"],
+    }
+
+
 @pytest.mark.asyncio
 async def test_spans_start_and_end(any_conn) -> None:
     sid = await span_repo.start(
         any_conn, trace_id="tr", parent_span_id=None, session_id="s", task_id=None,
-        name="n", attrs={"a": 1},
+        name="n", attrs={"a": 1, "b": {"x": 1}},
     )
     assert isinstance(sid, str) and sid
-    await span_repo.end(any_conn, sid, status="ok", attrs={"b": {"c": 2}, "a": 3})
+    before = await _read_span(any_conn, sid)
+    assert before["status"] == "unset" and before["ended_at"] is None
+    assert before["attrs"] == {"a": 1, "b": {"x": 1}}
+
+    await span_repo.end(any_conn, sid, status="ok", attrs={"a": 3, "c": 2})
+    got = await _read_span(any_conn, sid)
+    assert got["attrs"] == {"a": 3, "b": {"x": 1}, "c": 2}  # new wins, old kept
+    assert got["status"] == "ok"
+    assert got["ended_at"] is not None and got["ended_at"] >= got["started_at"]
+
     sid2 = await span_repo.start(
-        any_conn, trace_id="tr", parent_span_id=sid, session_id="s", task_id=None, name="m",
+        any_conn, trace_id="tr", parent_span_id=sid, session_id="s", task_id=None,
+        name="m", attrs={"k": "v"},
     )
     await span_repo.end(any_conn, sid2, status="error")
+    got2 = await _read_span(any_conn, sid2)
+    assert got2["attrs"] == {"k": "v"}
+    assert got2["status"] == "error" and got2["ended_at"] is not None
+
+    # `$`-prefixed string values are data, not expressions
+    sid3 = await span_repo.start(
+        any_conn, trace_id="tr", parent_span_id=None, session_id="s", task_id=None, name="d",
+    )
+    await span_repo.end(any_conn, sid3, attrs={"v": "$notafield"})
+    assert (await _read_span(any_conn, sid3))["attrs"] == {"v": "$notafield"}
+
     await span_repo.end(any_conn, "missing")  # no-op, must not raise
+
+
+@pytest.mark.asyncio
+async def test_list_with_stats_limit_zero_returns_empty(any_conn) -> None:
+    await _make_session(any_conn)
+    assert await sess_repo.list_with_stats(any_conn, limit=0) == []
 
 
 @pytest.mark.asyncio

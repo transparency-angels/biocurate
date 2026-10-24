@@ -108,6 +108,8 @@ async def set_final_overview(conn: AtlasConn, session_id: str, rel_path: str) ->
 
 async def list_with_stats(conn: AtlasConn, *, limit: int | None = None) -> list[dict]:
     """Sessions newest-updated first, with hypothesis count and best Elo."""
+    if limit is not None and limit <= 0:  # Mongo `$limit` must be positive
+        return []
     pipeline: list[dict[str, Any]] = [{"$sort": {"updated_at": -1, "_id": -1}}]
     if limit is not None:
         pipeline.append({"$limit": limit})
