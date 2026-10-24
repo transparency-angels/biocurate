@@ -373,7 +373,29 @@ than parsing artifacts in the UI.
       merging. It creates any new indexes.
 - [ ] Don't commit a `backend = "atlas"` change to `config/default.toml`; use an overlay.
 
-## 10. Known gaps (deliberately deferred)
+## 10. Live verification (2026-10-24)
+
+Two short research sessions on the real cluster (provider `gemini`, $3 cap each):
+
+| | Session 1 | Session 2 (after fixes) |
+|---|---|---|
+| Spend | $0.64 | $0.83 |
+| Tasks | 11 done, 0 stuck/dead | 1 dead (Generation budget share exhausted), 0 stuck |
+| `search_library` calls | 5, all errored (`db=None` bug) | **19 ok, 0 errors; 39 distinct anchors returned** |
+| Hypotheses citing library anchors | 0 | **1 of 1** (`PMC13388181#F2`, `PMC13388181#s3.p5`) |
+| Valid tournament matches | 0 (verdicts truncated at 2048 tokens) | 0 (only 1 hypothesis, so nothing to rank) |
+| Atlas errors | none | none |
+
+Fixes landed between the runs:
+- tools now receive the agent's DB connection, both in-process and in the MCP subprocess (`618911c`, `24bb2f9`);
+- `[ranking] max_output_tokens` defaults to 8192 (`24dc274`).
+
+Still not seen in a real run:
+- **Elo transaction:** it has only been verified by the live-Atlas tests (idempotency, rollback, transient retry). To exercise it in a session, raise the budget or the Generation share in `[budget_shares]` so at least 2–3 hypotheses reach the tournament. Generation's 19 library searches used its whole 0.72 share in run 2.
+- **Voyage rerank:** it hit `RateLimitError` 21 times in run 2 and fell back to fused order. Accounts without a payment method get very low rate limits. Add one on the Voyage dashboard before the demo; the free token allowance still applies.
+- **Orphan artifact:** one hypothesis artifact was written to disk with no DB row or vector. It was probably a dedup-suppressed near-duplicate, but no event records it.
+
+## 11. Known gaps (deliberately deferred)
 
 - **Hybrid search:** doesn't request `scoreDetails` (useful for showing fusion in the Atlas UI).
 - **Dedup:** emits no log line when it flags a duplicate.
