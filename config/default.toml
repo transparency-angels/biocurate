@@ -18,7 +18,10 @@ budget_usd = 25.0
 
 [storage]
 data_dir = "./data"
-backend = "sqlite"                   # sqlite | atlas (atlas needs MONGODB_URI)
+# "sqlite": local file under data_dir, offline, FAISS for vectors (the default).
+# "atlas":  MongoDB Atlas for all state, Atlas Vector Search for vectors, and the
+#           evidence library. Needs MONGODB_URI (and VOYAGE_API_KEY) in the environment.
+backend = "sqlite"
 atlas_db = "biocurate"
 atlas_prefix = ""                    # collection-name prefix; tests set a unique one
 
