@@ -16,7 +16,7 @@ from co_scientist.storage.atlas.client import (
     connect_atlas,
     shutdown_clients,
 )
-from co_scientist.tests.atlas.conftest import drop_prefixed
+from co_scientist.tests.atlas_support import drop_prefixed
 
 URI = "mongodb://user:s3cret@localhost:1/"
 

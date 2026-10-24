@@ -9,6 +9,7 @@ import pytest_asyncio
 
 from co_scientist.config import Config, RunCfg, Secrets, StorageCfg
 from co_scientist.storage import db as db_mod
+from co_scientist.tests import atlas_support
 
 
 @pytest.fixture(autouse=True)
@@ -46,3 +47,27 @@ async def conn(tmp_cfg: Config):
         yield c
     finally:
         await c.close()
+
+
+@pytest_asyncio.fixture(params=["sqlite", "atlas"])
+async def any_conn(request: pytest.FixtureRequest, tmp_cfg: Config):
+    """A connection on each backend; the atlas param needs CO_SCI_ATLAS_TESTS=1."""
+    if request.param == "sqlite":
+        c = await db_mod.connect(tmp_cfg)
+        try:
+            yield c
+        finally:
+            await c.close()
+        return
+    if not atlas_support.ENABLED:
+        pytest.skip("set CO_SCI_ATLAS_TESTS=1 to run live Atlas tests")
+    from co_scientist.storage.atlas.client import connect_atlas
+    from co_scientist.storage.atlas.indexes import ensure_indexes
+
+    cfg = atlas_support.make_atlas_cfg()
+    c = await connect_atlas(cfg)
+    try:
+        await ensure_indexes(c, cfg)
+        yield c
+    finally:
+        await atlas_support.drop_prefixed(c.db, c.prefix)
