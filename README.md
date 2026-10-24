@@ -54,11 +54,11 @@ each entry, all in a local SQLite database you can query, or in MongoDB Atlas (s
 | **Faithful to the paper** | The agent roster, the prompts and the control flow follow Gottweis et al. The per-agent prompts in [`config/prompts/`](config/prompts/) come from the paper's supplement. |
 | **Runs on a subscription** | Point it at `claude -p` or `codex exec` and it bills nothing per token. Structured output and citation provenance come back through a bundled MCP server. |
 | **Or any model you like** | OpenRouter by default, so one key reaches 200+ models and `[models]` can give each agent a different vendor. Anthropic, OpenAI, Gemini, Groq, Together, Mistral and Ollama work directly. |
-| **Durable, resumable runs** | A SQLite-backed task queue with leases, dead-lettering and resume. Kill it mid-session and `resume` picks up where it stopped. |
+| **Durable, resumable runs** | A task queue (SQLite or Atlas) with leases, dead-lettering and resume. Kill it mid-session and `resume` picks up where it stopped. |
 | **Citations you can check** | An agent may only cite a URL it actually fetched. Every evidence row carries a URL and an excerpt, and a verifier enforces both. |
 | **Driveable by coding agents** | [`plugin/`](plugin/) is an Agent Plugins 1.0 package: one MCP server and seven skills that work in Claude Code, Codex CLI, Cursor, VS Code, Copilot and Kiro. |
 | **Measured, not asserted** | `co-scientist bench` settles N models on one goal in a shared Elo tournament with gold-set recall scoring. Every run ever done is in [`docs/BENCH_RESULTS.md`](docs/BENCH_RESULTS.md). |
-| **Tested** | 418 unit tests, all offline. No key, no network, no subscription quota to run the suite. |
+| **Tested** | ~550 offline tests, plus the same repo contract tests against Atlas when `CO_SCI_ATLAS_TESTS=1`. On the default `sqlite` backend the suite needs no key, no network and no subscription quota. |
 
 ## Built on MongoDB Atlas
 
@@ -742,7 +742,7 @@ co_scientist/
   obs/          # metrics (tokens, cost, cache hit ratio, latency)
   web/          # FastAPI + htmx + SSE UI + sanitized markdown renderer
   evals/        # per-agent + e2e + regression evals
-  tests/        # 418 unit tests (all offline) + fixtures + smoke
+  tests/        # ~550 offline tests (Atlas tests gated by CO_SCI_ATLAS_TESTS=1) + fixtures + smoke
 config/
   default.toml
   prompts/      # 14 Jinja2 templates (one per agent.mode), derived from
