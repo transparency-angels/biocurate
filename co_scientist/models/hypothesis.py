@@ -23,6 +23,7 @@ class CitedPaper(BaseModel):
     excerpt: str | None = None
     doi: str | None = None
     year: int | None = None
+    line_range: str | None = None
 
 
 class Hypothesis(BaseModel):

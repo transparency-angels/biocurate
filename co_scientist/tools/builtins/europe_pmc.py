@@ -6,6 +6,7 @@ No API key required.
 
 from __future__ import annotations
 
+import re
 import time
 from typing import Any
 
@@ -14,6 +15,23 @@ import httpx
 from ..base import ToolCtx, ToolResult
 
 EUROPE_PMC_URL = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9(\[\"'])")
+
+
+def _add_line_numbers(text: str) -> str:
+    """Prepends line numbers ([L1], [L2], ...) to each sentence/line of text."""
+    if not text:
+        return ""
+    lines: list[str] = []
+    for raw_line in text.splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        if len(stripped) > 140:
+            lines.extend(p.strip() for p in _SENTENCE_SPLIT_RE.split(stripped) if p.strip())
+        else:
+            lines.append(stripped)
+    return "\n".join(f"[L{i+1}] {line}" for i, line in enumerate(lines))
 
 
 class EuropePMCSearchTool:
@@ -61,7 +79,7 @@ class EuropePMCSearchTool:
                     "id": hit.get("id"),
                     "source": hit.get("source"),
                     "title": hit.get("title"),
-                    "abstract": hit.get("abstractText", ""),
+                    "abstract": _add_line_numbers(hit.get("abstractText", "")),
                     "authors": hit.get("authorString", ""),
                     "journal": hit.get("journalTitle"),
                     "year": hit.get("pubYear"),

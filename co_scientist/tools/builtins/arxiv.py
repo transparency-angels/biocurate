@@ -76,6 +76,13 @@ class ArxivSearchTool:
         )
 
 
+def _add_line_numbers(text: str) -> str:
+    """Prepends line numbers ([L1], [L2], ...) to each line of text."""
+    if not text:
+        return ""
+    return "\n".join(f"[L{i+1}] {line}" for i, line in enumerate(text.splitlines()))
+
+
 def _parse_atom(xml: str) -> list[dict[str, Any]]:
     root = ET.fromstring(xml)
     out: list[dict[str, Any]] = []
@@ -83,7 +90,9 @@ def _parse_atom(xml: str) -> list[dict[str, Any]]:
         id_url = (e.findtext("a:id", default="", namespaces=_NS) or "").strip()
         arxiv_id = id_url.rsplit("/", 1)[-1]
         title = (e.findtext("a:title", default="", namespaces=_NS) or "").strip()
-        summary = (e.findtext("a:summary", default="", namespaces=_NS) or "").strip()
+        summary = _add_line_numbers(
+            (e.findtext("a:summary", default="", namespaces=_NS) or "").strip()
+        )
         published = (e.findtext("a:published", default="", namespaces=_NS) or "")[:10]
         authors = [
             (a.findtext("a:name", default="", namespaces=_NS) or "").strip()

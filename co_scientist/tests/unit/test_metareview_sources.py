@@ -178,3 +178,74 @@ def test_final_prompt_without_sources_tells_the_model_to_say_so() -> None:
     )
 
     assert "no literature sources were recorded" in prompt
+
+
+def test_line_level_citations_in_source_block() -> None:
+    hyps = [_hyp("hyp_a", [
+        CitedPaper(
+            title="Paper SCFA",
+            url="https://scfa.example",
+            excerpt="[L3] The anti-inflammatory role of butyrate\n[L4] Intestinally derived SCFAs\n[L5] An ecological understanding",
+        )
+    ])]
+    reviews = [_review("hyp_a", [
+        Evidence(
+            claim="Claim Heart",
+            url="https://heart.example",
+            excerpt="[L12] Microbial metabolites exert various important effects",
+        )
+    ])]
+
+    block = MetaReviewAgent._source_block(hyps, reviews)
+
+    assert "[S1]" in block
+    assert "(lines: L3-L5)" in block
+    assert "[S2]" in block
+    assert "(lines: L12)" in block
+
+
+def test_extract_citations_line_level_and_source() -> None:
+    sample_text = (
+        "SCFAs mediate epithelial barrier function [S1, L3-L5]. "
+        "Cardiac physiology is regulated by microbial metabolites [S2, L12]. "
+        "Further evidence confirms this pathway [S1, L2] and older finding [S3]."
+    )
+
+    cites = MetaReviewAgent.extract_citations(sample_text)
+    assert len(cites) == 4
+
+    assert cites[0]["raw"] == "[S1, L3-L5]"
+    assert cites[0]["source"] == "S1"
+    assert cites[0]["source_idx"] == 1
+    assert cites[0]["start_line"] == 3
+    assert cites[0]["end_line"] == 5
+    assert cites[0]["line_range"] == "L3-L5"
+
+    assert cites[1]["raw"] == "[S2, L12]"
+    assert cites[1]["source"] == "S2"
+    assert cites[1]["source_idx"] == 2
+    assert cites[1]["start_line"] == 12
+    assert cites[1]["end_line"] == 12
+    assert cites[1]["line_range"] == "L12"
+
+    assert cites[2]["raw"] == "[S1, L2]"
+    assert cites[2]["line_range"] == "L2"
+
+    assert cites[3]["raw"] == "[S3]"
+    assert cites[3]["source"] == "S3"
+    assert cites[3]["start_line"] is None
+    assert cites[3]["line_range"] is None
+
+
+def test_final_prompt_instructs_line_level_citation_format() -> None:
+    from co_scientist.llm.prompts import render
+
+    prompt = render(
+        "metareview.final",
+        goal="g", preferences="", system_feedback="",
+        top_hypotheses_block="(hyps)",
+        sources="- [S1] Paper A (lines: L1-L5)\n  https://a.example",
+    )
+
+    assert "[S#, L#-L#]" in prompt
+
