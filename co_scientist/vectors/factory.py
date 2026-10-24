@@ -10,8 +10,9 @@ from .base import VectorStore
 
 def make_vector_store(cfg: Config, db: Conn, session_id: str, dim: int) -> VectorStore:
     if isinstance(db, AtlasConn):
-        # Lazy import: the Atlas implementation is added in Task 7.
-        raise NotImplementedError("AtlasVectorStore: Task 7")
+        from .atlas_store import AtlasVectorStore
+
+        return AtlasVectorStore(cfg, db, session_id, dim)
     from .store import FaissStore
 
     return FaissStore(cfg, session_id, dim=dim)

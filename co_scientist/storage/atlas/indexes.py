@@ -66,11 +66,28 @@ def library_vec_definition(cfg: Config) -> dict:
         }
     return {"fields": [field, *_LIB_FILTERS]}
 
+
+def hyp_vec_definition(cfg: Config) -> dict:
+    """Vector index for `hypothesis_vectors`, scoped per session via a filter field."""
+    return {
+        "fields": [
+            {
+                "type": "vector",
+                "path": "embedding",
+                "numDimensions": cfg.embeddings.dim,
+                "similarity": "dotProduct",
+            },
+            {"type": "filter", "path": "session_id"},
+        ]
+    }
+
+
 # Names are static; they equal the `LibraryCfg` defaults (asserted in a test).
 SEARCH_INDEX_SPECS.extend(
     [
         SearchIndexSpec("library", "library_text", "search", lambda cfg: LIBRARY_TEXT_INDEX),
         SearchIndexSpec("library", "library_vec", "vectorSearch", library_vec_definition),
+        SearchIndexSpec("hypothesis_vectors", "hyp_vec", "vectorSearch", hyp_vec_definition),
     ]
 )
 
@@ -118,6 +135,7 @@ BTREE_INDEXES: dict[str, list[IndexModel]] = {
         IndexModel([("hypothesis_id", _A), ("model", _A)], name="emb_hyp_model", unique=True)
     ],
     "library": [IndexModel([("pmcid", _A)], name="library_pmcid")],
+    "hypothesis_vectors": [IndexModel([("session_id", _A)], name="hv_sess")],
 }
 
 
