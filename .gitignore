@@ -1,7 +1,7 @@
 reference/*
 
 # Runtime data
-data/
+/data/
 *.db
 *.db-wal
 *.db-shm
