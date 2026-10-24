@@ -827,6 +827,7 @@ def library_ingest(
     console.print(f"passages stored: {rep.passages}")
     console.print(f"already present: {', '.join(rep.already_present) or '-'}")
     console.print(f"skipped (no full text / unparseable): {', '.join(rep.skipped) or '-'}")
+    console.print(f"failed (errors; safe to re-run): {'; '.join(rep.failed) or '-'}")
 
 
 @library_app.command("stats")

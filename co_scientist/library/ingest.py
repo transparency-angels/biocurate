@@ -61,6 +61,8 @@ class IngestReport:
     passages: int = 0
     skipped: list[str] = field(default_factory=list)
     already_present: list[str] = field(default_factory=list)
+    failed: list[str] = field(default_factory=list)
+    """`"<pmcid>: <ExceptionType>: <message>"` for errors; safe to re-run."""
 
 
 def dedupe_anchors(passages: list[Passage]) -> list[Passage]:
@@ -95,15 +97,18 @@ async def ingest_query(
     sem = asyncio.Semaphore(_CONCURRENCY)
 
     async def one(pmcid: str) -> None:
+        try:
+            await _one(pmcid)
+        except Exception as e:
+            log.warning("library_paper_failed", pmcid=pmcid, error=str(e)[:120])
+            report.failed.append(f"{pmcid}: {type(e).__name__}: {str(e)[:120]}")
+
+    async def _one(pmcid: str) -> None:
         async with sem:
             if await store.has_paper(pmcid):
                 report.already_present.append(pmcid)
                 return
-            try:
-                xml = await fetch_jats(client, pmcid)
-            except httpx.HTTPError as e:
-                log.warning("library_fetch_failed", pmcid=pmcid, error=str(e))
-                xml = None
+            xml = await fetch_jats(client, pmcid)
             if xml is None:
                 report.skipped.append(pmcid)
                 return
@@ -136,4 +141,5 @@ async def ingest_query(
     order = {p: i for i, p in enumerate(pmcids)}
     report.skipped.sort(key=order.get)
     report.already_present.sort(key=order.get)
+    report.failed.sort(key=lambda f: order[f.split(":", 1)[0]])
     return report

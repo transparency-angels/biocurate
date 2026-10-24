@@ -136,3 +136,49 @@ async def test_ingest_counts_passages_across_concurrent_papers():
     async with _client(xmls) as http:
         rep = await ingest_query(None, Config(), "q", http=http, store=SlowStore())
     assert (rep.papers, rep.passages) == (5, 15)
+
+
+async def test_ingest_records_store_failure_and_continues():
+    class BoomStore(FakeStore):
+        async def upsert_passages(self, meta, passages, *, embeddings=None) -> int:
+            if meta.pmcid == "PMC2":
+                raise RuntimeError("bulk write exploded")
+            return await super().upsert_passages(meta, passages, embeddings=embeddings)
+
+    store = BoomStore()
+    xmls = {f"PMC{i}": _xml("a", "b") for i in (1, 2, 3)}
+    async with _client(xmls) as http:
+        rep = await ingest_query(None, Config(), "q", http=http, store=store)
+    assert (rep.papers, rep.passages) == (2, 4)
+    assert len(rep.failed) == 1
+    assert rep.failed[0].startswith("PMC2: RuntimeError:")
+    assert rep.skipped == []
+
+
+async def test_ingest_records_transient_fetch_failure():
+    def handler(req: httpx.Request) -> httpx.Response:
+        path = req.url.path
+        if path.endswith("/search"):
+            res = [{"pmcid": p} for p in ("PMC1", "PMC2", "PMC3")]
+            return httpx.Response(200, json={"resultList": {"result": res}})
+        pmcid = path.split("/")[-2]
+        if pmcid == "PMC1":
+            return httpx.Response(500)
+        if pmcid == "PMC2":
+            raise httpx.ConnectTimeout("slow", request=req)
+        return httpx.Response(200, text=_xml("ok"))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        rep = await ingest_query(None, Config(), "q", http=http, store=FakeStore())
+    assert rep.skipped == []
+    assert [f.split(":")[0] for f in rep.failed] == ["PMC1", "PMC2"]
+    assert "HTTPStatusError" in rep.failed[0] and "ConnectTimeout" in rep.failed[1]
+    assert rep.papers == 1
+
+
+def test_passage_url_strips_dedupe_suffix_and_keeps_split_suffix():
+    from co_scientist.storage.atlas.library import passage_url
+
+    base = "https://europepmc.org/article/PMC/PMC1"
+    assert passage_url("PMC1", "PMC1#F2~2") == f"{base}#F2"
+    assert passage_url("PMC1", "PMC1#s1.p2.1~3") == f"{base}#s1.p2.1"
