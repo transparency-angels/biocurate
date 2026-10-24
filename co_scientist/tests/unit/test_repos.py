@@ -941,3 +941,15 @@ async def test_apply_elo_update_retries_transient_transaction_error(any_conn) ->
     assert await any_conn.coll("elo_journal").count_documents({}) == 1
     ha = await hyp_repo.fetch(any_conn, a)
     assert (ha.matches_played, ha.elo) == (1, 1216.0)  # applied once, not twice
+
+
+@pytest.mark.asyncio
+async def test_fail_returns_actual_status(any_conn) -> None:
+    s = await _make_session(any_conn)
+    t = _task(s.id, 0)
+    await task_repo.enqueue(any_conn, t)
+    seq = [await task_repo.fail(any_conn, t.id, f"e{i}", max_attempts=3) for i in range(3)]
+    assert seq == ["pending", "pending", "dead"]
+    row = await _read_task(any_conn, t.id)
+    assert row["attempts"] == 3 and row["status"] == "dead"
+    assert row["last_error"] == "e2" and row["finished_at"] is not None

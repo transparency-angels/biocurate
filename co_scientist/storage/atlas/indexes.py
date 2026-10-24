@@ -45,6 +45,11 @@ BTREE_INDEXES: dict[str, list[IndexModel]] = {
             [("session_id", _A), ("status", _A), ("priority", _A), ("created_at", _A)],
             name="tasks_queue",
         ),
+        # `_id` last so claim_one's (priority, created_at, _id) sort is index-covered.
+        IndexModel(
+            [("session_id", _A), ("status", _A), ("priority", _A), ("created_at", _A), ("_id", _A)],
+            name="tasks_queue_v2",
+        ),
         IndexModel(
             [("idempotency_key", _A)],
             name="tasks_idempotency_key",
@@ -82,6 +87,8 @@ async def ensure_indexes(conn: AtlasConn, cfg: Config) -> None:
     """Idempotently create B-tree indexes and any missing search indexes."""
     for name, models in BTREE_INDEXES.items():
         await conn.coll(name).create_indexes(models)
+    # Pre-create so the first Elo transaction does not implicitly create it.
+    await conn.ensure_collection("elo_journal")
 
     by_coll: dict[str, list[SearchIndexSpec]] = {}
     for spec in SEARCH_INDEX_SPECS:

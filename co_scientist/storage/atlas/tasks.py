@@ -124,37 +124,33 @@ async def fail(
 ) -> str:
     """Increment attempts; either requeue or dead-letter. Returns the final status."""
     _ = requeue_backoff_seconds  # backoff is enforced cooperatively by the scheduler
-    coll = conn.coll(_COLL)
-    d = await coll.find_one_and_update(
+    # One atomic pipeline update. Every `$attempts` in a stage reads the pre-update value,
+    # so the status test uses attempts + 1 against max_attempts, as SQLite does.
+    new_attempts = {"$add": ["$attempts", 1]}
+    is_dead = {"$gte": [new_attempts, max_attempts]}
+
+    def per_branch(dead: Any, pending: Any) -> dict[str, Any]:
+        return {"$cond": [is_dead, dead, pending]}
+
+    d = await conn.coll(_COLL).find_one_and_update(
         {"_id": task_id},
-        {"$inc": {"attempts": 1}},
-        projection={"attempts": 1},
+        [
+            {
+                "$set": {
+                    "attempts": new_attempts,
+                    "status": per_branch("dead", "pending"),
+                    "last_error": {"$literal": error[:4000]},
+                    "finished_at": per_branch(now(), "$finished_at"),
+                    "lease_owner": per_branch("$lease_owner", None),
+                    "lease_expires_at": per_branch("$lease_expires_at", None),
+                    "started_at": per_branch("$started_at", None),
+                }
+            }
+        ],
+        projection={"status": 1},
         return_document=ReturnDocument.AFTER,
     )
-    if d is None:
-        return "missing"
-    attempts = d["attempts"]
-    # Keyed on the post-increment attempts so a concurrent fail cannot be overwritten.
-    key = {"_id": task_id, "attempts": attempts}
-    if attempts >= max_attempts:
-        await coll.update_one(
-            key,
-            {"$set": {"status": "dead", "last_error": error[:4000], "finished_at": now()}},
-        )
-        return "dead"
-    await coll.update_one(
-        key,
-        {
-            "$set": {
-                "status": "pending",
-                "last_error": error[:4000],
-                "lease_owner": None,
-                "lease_expires_at": None,
-                "started_at": None,
-            }
-        },
-    )
-    return "pending"
+    return "missing" if d is None else d["status"]
 
 
 async def cancel_pending_for_session(conn: AtlasConn, session_id: str) -> int:
