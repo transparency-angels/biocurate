@@ -168,11 +168,10 @@ class RankingAgent(BaseAgent):
         *,
         focus_id: str | None,
     ) -> tuple[Hypothesis, Hypothesis, float | None] | None:
-        # Build the FAISS store once for this pair selection — every prior
-        # iteration re-instantiated the embedder, re-read index.faiss + JSON
-        # off disk, and reconstructed the entire index just to dot-product two
-        # rows. With ~20 pair candidates per RunTournamentBatch that was
-        # ~20 full-index reloads and reconstructions for a single match.
+        # Build the vector store once for this pair selection — every prior
+        # iteration re-instantiated the embedder and reloaded the whole index
+        # just to dot-product two rows. With ~20 pair candidates per
+        # RunTournamentBatch that was ~20 full reloads for a single match.
         store = await self._load_store(session_id)
 
         if focus_id:

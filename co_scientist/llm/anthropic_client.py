@@ -21,12 +21,12 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
-import aiosqlite
 from anthropic import AsyncAnthropic
 
 from ..config import Config
 from ..ids import transcript_id
 from ..models import Transcript
+from ..storage import Conn
 from ..storage.artifacts import write_json
 from ..storage.repos import sessions as sessions_repo
 from ..storage.repos import transcripts as transcripts_repo
@@ -57,7 +57,7 @@ class AnthropicClient:
         self,
         cfg: Config,
         *,
-        db: aiosqlite.Connection,
+        db: Conn,
         budget: TokenBudget,
         retry_policy: RetryPolicy | None = None,
     ) -> None:

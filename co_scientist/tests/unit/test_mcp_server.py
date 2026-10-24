@@ -352,3 +352,38 @@ def test_mcp_server_loads_secrets_from_env_file(
     monkeypatch.setenv("COSCI_ENV_FILE", str(envf))
     monkeypatch.setenv("COSCI_CAPTURE_DIR", str(tmp_path / "cap"))
     assert CoScientistMcpServer().cfg.secrets.MONGODB_URI == "mongodb://example/x"
+
+
+async def test_both_mcp_servers_shut_down_atlas_clients(monkeypatch, tmp_cfg) -> None:
+    from co_scientist.mcp import protocol, server, session_server
+    from co_scientist.storage.atlas import client as atlas_client
+
+    calls: list[str] = []
+
+    async def spy() -> None:
+        calls.append("shutdown")
+
+    async def serve_then_fail(self) -> None:
+        raise RuntimeError("transport died")
+
+    monkeypatch.setattr(atlas_client, "shutdown_clients", spy)
+    monkeypatch.setattr(protocol.McpStdioServer, "serve", serve_then_fail)
+    monkeypatch.setattr(session_server, "SessionMcpServer", lambda cfg: _FakeSrv(tmp_cfg))
+    monkeypatch.setattr(server, "CoScientistMcpServer", lambda: _FakeSrv(tmp_cfg))
+    with pytest.raises(RuntimeError):
+        await session_server.serve(tmp_cfg)
+    with pytest.raises(RuntimeError):
+        await server._amain()
+    assert calls == ["shutdown", "shutdown"]
+
+
+class _FakeSrv:
+    def __init__(self, cfg) -> None:
+        self.cfg, self.allow_start = cfg, False
+        self.record_tools, self.research_tools, self.agent = {}, {}, "a"
+
+    def tool_list(self) -> list:
+        return []
+
+    async def handle(self, name, args):  # pragma: no cover
+        return {}

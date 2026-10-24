@@ -22,8 +22,6 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
-import aiosqlite
-
 from .. import ids
 from ..config import Config
 from ..llm.budgets import TokenBudget
@@ -44,6 +42,7 @@ from ..orchestrator.termination import (
     should_stop,
     snapshot_top_k,
 )
+from ..storage import Conn
 from ..storage import db as db_mod
 from ..storage.artifacts import write_text
 from ..storage.repos import events as events_repo
@@ -158,7 +157,7 @@ class Supervisor:
 
     async def _create_session(
         self,
-        conn: aiosqlite.Connection,
+        conn: Conn,
         goal: str,
         preferences_text: str | None,
         wall_clock_seconds: int | None,
@@ -227,7 +226,7 @@ class Supervisor:
         )
 
     async def _apply_plan(
-        self, conn: aiosqlite.Connection, session: Session, plan: ResearchPlan
+        self, conn: Conn, session: Session, plan: ResearchPlan
     ) -> None:
         await sess_repo.set_research_plan(conn, session.id, plan.model_dump(mode="json"))
 
@@ -235,7 +234,7 @@ class Supervisor:
 
     async def _main_loop(
         self,
-        conn: aiosqlite.Connection,
+        conn: Conn,
         deps: AgentDeps,
         session: Session,
         tracker: StabilityTracker,
@@ -357,7 +356,7 @@ class Supervisor:
 
     async def _apply_follow_ups(
         self,
-        conn: aiosqlite.Connection,
+        conn: Conn,
         session: Session,
         task: Task,
         result,
@@ -414,7 +413,7 @@ class Supervisor:
     # ----------------------------- decide_next_steps ----------------------------- #
 
     async def _decide_next_steps(
-        self, conn: aiosqlite.Connection, session: Session
+        self, conn: Conn, session: Session
     ) -> int:
         """When the queue empties: refill it with refinement work. Returns # enqueued."""
         from ..storage.repos import tournaments as tourney_repo
@@ -481,7 +480,7 @@ class Supervisor:
 
     async def _finalize(
         self,
-        conn: aiosqlite.Connection,
+        conn: Conn,
         deps: AgentDeps,
         session: Session,
         stop_reason: StopReason | None,
@@ -534,7 +533,7 @@ class Supervisor:
                          {"stop_reason": stop_reason.value if stop_reason else None})
 
     async def _write_simple_overview(
-        self, conn: aiosqlite.Connection, session: Session
+        self, conn: Conn, session: Session
     ) -> str:
         hyps = await hyp_repo.list_for_session(conn, session.id)
         parts: list[str] = [
@@ -595,7 +594,7 @@ class Supervisor:
 
     async def _emit(
         self,
-        conn: aiosqlite.Connection,
+        conn: Conn,
         session_id: str,
         event: str,
         payload: dict[str, Any] | None = None,

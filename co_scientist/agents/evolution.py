@@ -233,7 +233,9 @@ class EvolutionAgent(BaseAgent):
 
         # Dedup: cheap nearest-neighbour query. Same pattern as Generation.
         try:
-            dup_id, embed_payload = await self._dedup_query(session_id, summary)
+            dup_id, embed_payload = await self._dedup_query(
+                session_id, summary, hypothesis_id=hid
+            )
         except Exception as e:
             log.warning("evolution_dedup_query_failed", err=str(e))
             dup_id, embed_payload = None, None
@@ -265,7 +267,7 @@ class EvolutionAgent(BaseAgent):
     # ----------------------------- helpers ----------------------------- #
 
     async def _dedup_query(
-        self, session_id: str, text: str
+        self, session_id: str, text: str, hypothesis_id: str | None = None
     ) -> tuple[str | None, dict[str, Any] | None]:
         try:
             embedder = make_embedder(self.deps.cfg)
@@ -282,6 +284,11 @@ class EvolutionAgent(BaseAgent):
         nearest = await store.search(np.asarray(v), k=1)
         thr = self.deps.cfg.vectors.dedup_cosine_threshold
         if nearest and nearest[0][1] >= thr:
+            if nearest[0][0] != hypothesis_id:  # a re-run of the same id is not a duplicate
+                log.info(
+                    "dedup_duplicate_found", agent='evolution', hypothesis_id=hypothesis_id,
+                    duplicate_of=nearest[0][0], cosine=round(float(nearest[0][1]), 4),
+                )
             return nearest[0][0], None
         return None, {
             "vector": np.asarray(v),

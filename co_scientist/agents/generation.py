@@ -177,15 +177,17 @@ class GenerationAgent(BaseAgent):
             if isinstance(c, dict) and c.get("url")
         ]
 
-        # Step 1: embed + near-neighbour check (does NOT mutate FAISS).
+        # Step 1: embed + near-neighbour check (does NOT mutate the vector store).
         try:
-            dup_id, embed_payload = await self._dedup_query(session_id, summary)
+            dup_id, embed_payload = await self._dedup_query(
+                session_id, summary, hypothesis_id=hid
+            )
         except Exception as e:
             log.warning("dedup_query_failed", err=str(e))
             dup_id, embed_payload = None, None
 
         if dup_id is not None and dup_id != hid:
-            # Found a near-duplicate already in this session: skip insert + skip FAISS.
+            # Found a near-duplicate already in this session: skip insert + skip the vector store.
             return dup_id, False
 
         # Step 2: insert the hypothesis row. Deterministic IDs make this idempotent.
@@ -205,7 +207,7 @@ class GenerationAgent(BaseAgent):
         )
         inserted = await hyp_repo.insert(self.deps.db, h)
 
-        # Step 3: only add to FAISS if we actually inserted a new row, so FAISS and
+        # Step 3: only add to the vector store if we actually inserted a new row, so it and
         # the hypotheses table can never disagree (FK in embeddings_meta enforces it).
         if inserted and embed_payload is not None:
             try:
@@ -216,9 +218,9 @@ class GenerationAgent(BaseAgent):
         return hid, inserted
 
     async def _dedup_query(
-        self, session_id: str, text: str
+        self, session_id: str, text: str, hypothesis_id: str | None = None
     ) -> tuple[str | None, dict[str, Any] | None]:
-        """Read-only: embed + nearest-neighbour search. No FAISS mutation.
+        """Read-only: embed + nearest-neighbour search. No vector-store mutation.
 
         Returns (existing_duplicate_id_or_None, embed_payload_for_later_commit).
         """
@@ -237,6 +239,11 @@ class GenerationAgent(BaseAgent):
         nearest = await store.search(np.asarray(v), k=1)
         thr = self.deps.cfg.vectors.dedup_cosine_threshold
         if nearest and nearest[0][1] >= thr:
+            if nearest[0][0] != hypothesis_id:  # a re-run of the same id is not a duplicate
+                log.info(
+                    "dedup_duplicate_found", agent='generation', hypothesis_id=hypothesis_id,
+                    duplicate_of=nearest[0][0], cosine=round(float(nearest[0][1]), 4),
+                )
             return nearest[0][0], None
         payload = {
             "vector": np.asarray(v),
@@ -249,7 +256,7 @@ class GenerationAgent(BaseAgent):
     async def _dedup_commit(
         self, session_id: str, hypothesis_id: str, payload: dict[str, Any]
     ) -> None:
-        """Write-side of dedup: add to FAISS + register the embedding."""
+        """Write-side of dedup: add to the vector store + register the embedding."""
         store = make_vector_store(
             self.deps.cfg, self.deps.db, session_id, dim=payload["dim"]
         )

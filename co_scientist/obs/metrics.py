@@ -10,8 +10,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-import aiosqlite
-
+from ..storage import Conn
 from ..storage.repos import events as events_repo
 from ..storage.repos import hypotheses as hyp_repo
 from ..storage.repos import tasks as task_repo
@@ -40,7 +39,7 @@ class SessionMetrics:
     dead_tasks: int = 0
 
 
-async def session_metrics(conn: aiosqlite.Connection, session_id: str) -> SessionMetrics:
+async def session_metrics(conn: Conn, session_id: str) -> SessionMetrics:
     out = SessionMetrics()
 
     # LLM usage (from transcripts)
@@ -98,7 +97,7 @@ class LeaderboardEntry:
 
 
 async def leaderboard(
-    conn: aiosqlite.Connection, session_id: str, k: int = 10
+    conn: Conn, session_id: str, k: int = 10
 ) -> list[LeaderboardEntry]:
     hyps = await hyp_repo.top_by_elo(conn, session_id, k)
     return [
@@ -114,7 +113,7 @@ _CACHE: dict[str, tuple[float, SessionMetrics]] = {}
 
 
 async def session_metrics_cached(
-    conn: aiosqlite.Connection, session_id: str, *, ttl_s: float = 1.0
+    conn: Conn, session_id: str, *, ttl_s: float = 1.0
 ) -> SessionMetrics:
     now = time.monotonic()
     hit = _CACHE.get(session_id)

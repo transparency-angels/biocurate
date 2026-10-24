@@ -50,6 +50,7 @@ from ..agents.schemas import (
 )
 from ..config import Secrets, load_config
 from ..ids import tool_run_id
+from ..storage.atlas import client as atlas_client
 from ..tools.base import ToolCtx
 from ..tools.registry import ToolRegistry
 from ..tools.urls import extract_urls
@@ -310,7 +311,10 @@ async def _amain() -> None:
         tools=server.tool_list(),
         handler=server.handle,
     )
-    await transport.serve()
+    try:
+        await transport.serve()
+    finally:
+        await atlas_client.shutdown_clients()
 
 
 def main() -> None:

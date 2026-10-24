@@ -77,6 +77,11 @@ class SearchLibraryTool:
         except (TypeError, ValueError):
             return ToolResult(is_error=True, error_message="k must be an integer from 1 to 20")
         kind = args.get("kind") or None
+        kinds = self.input_schema["properties"]["kind"]["enum"]
+        if kind is not None and kind not in kinds:
+            return ToolResult(
+                is_error=True, error_message=f"kind must be one of {', '.join(kinds)}"
+            )
         names = (ctx.cfg.library.search_index, ctx.cfg.library.vector_index)
         try:
             if await lib_store.count(ctx.db) == 0:

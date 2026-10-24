@@ -13,10 +13,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 
-import aiosqlite
-
 from ..config import Config
 from ..models import Session
+from ..storage import Conn
 from ..storage.repos import hypotheses as hyp_repo
 from ..storage.repos import tournaments as tourney_repo
 
@@ -93,7 +92,7 @@ class StabilityTracker:
 
 
 async def snapshot_top_k(
-    conn: aiosqlite.Connection, session_id: str, k: int
+    conn: Conn, session_id: str, k: int
 ) -> EloSnapshot:
     """Read the current top-K leaderboard + count of completed matches + pool size."""
     rows = await hyp_repo.top_elo_ids(conn, session_id, k)

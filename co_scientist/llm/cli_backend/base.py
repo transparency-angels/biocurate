@@ -28,12 +28,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import aiosqlite
-
 from ...config import Config
 from ...ids import transcript_id
 from ...logging import get_logger
 from ...models import Transcript
+from ...storage import Conn
 from ...storage.artifacts import write_json
 from ...storage.repos import sessions as sessions_repo
 from ...storage.repos import transcripts as transcripts_repo
@@ -116,7 +115,7 @@ class AgentCliProvider(ABC):
         self,
         cfg: Config,
         *,
-        db: aiosqlite.Connection | None,
+        db: Conn | None,
         budget: TokenBudget,
         retry_policy: Any = None,       # accepted for call-site compatibility
     ) -> None:

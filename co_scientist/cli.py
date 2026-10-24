@@ -626,6 +626,11 @@ def bench_cmd(
     """
     cfg, _ = ctx.obj
     from .bench import BenchCandidate, get_preset, run_bench
+    from .bench.runner import ATLAS_UNSUPPORTED
+
+    if cfg.storage.backend == "atlas":
+        console.print(f"[red]{ATLAS_UNSUPPORTED}[/red]")
+        raise typer.Exit(2)
 
     if preset and candidate:
         console.print("[red]--preset and --candidate are mutually exclusive[/red]")

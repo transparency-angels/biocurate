@@ -57,6 +57,7 @@ from ..models import (
 from ..orchestrator.elo import update_elo
 from ..storage import db as db_mod
 from ..storage.artifacts import read_json, write_json
+from ..storage.atlas import client as atlas_client
 from ..storage.repos import feedback as fb_repo
 from ..storage.repos import hypotheses as hyp_repo
 from ..storage.repos import reviews as rev_repo
@@ -1045,12 +1046,15 @@ async def serve(cfg: Config | None = None) -> None:
         f"[session-mcp] db={server.cfg.db_path} "
         f"tools={len(TOOL_SCHEMAS)} start_allowed={server.allow_start}"
     )
-    await McpStdioServer(
-        name=SERVER_NAME,
-        version=SERVER_VERSION,
-        tools=server.tool_list(),
-        handler=server.handle,
-    ).serve()
+    try:
+        await McpStdioServer(
+            name=SERVER_NAME,
+            version=SERVER_VERSION,
+            tools=server.tool_list(),
+            handler=server.handle,
+        ).serve()
+    finally:
+        await atlas_client.shutdown_clients()
 
 
 def main(cfg: Config | None = None) -> None:

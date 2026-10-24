@@ -81,7 +81,11 @@ async def connect_atlas(cfg: Config) -> AtlasConn:
 
 
 async def shutdown_clients() -> None:
-    """Close every cached client."""
+    """Close the cached clients bound to the running loop and clear the cache.
+
+    Clients bound to other loops cannot be closed from here; they are dropped
+    from the cache only. Call this at the end of an entry point's main coroutine.
+    """
     clients = [c for lp, c in _clients.values() if lp is asyncio.get_running_loop()]
     _clients.clear()
     for c in clients:

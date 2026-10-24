@@ -130,3 +130,33 @@ async def test_search_library_tool_rejects_non_numeric_k(monkeypatch) -> None:
     _patch_store(monkeypatch)
     res = await SearchLibraryTool().call({"query": "x", "k": "lots"}, _atlas_ctx(Config()))
     assert res.is_error and "k must be" in res.error_message
+
+
+async def test_search_library_tool_rejects_unknown_kind(monkeypatch) -> None:
+    _patch_store(monkeypatch)
+    res = await SearchLibraryTool().call({"query": "x", "kind": "poster"}, _atlas_ctx(Config()))
+    assert res.is_error
+    assert "kind must be one of" in res.error_message and "abstract" in res.error_message
+
+
+async def test_search_library_tool_accepts_every_schema_kind(monkeypatch) -> None:
+    from co_scientist.library import search
+
+    _patch_store(monkeypatch)
+    seen: list[str] = []
+
+    async def hits(db, cfg, query, *, k, kind):
+        seen.append(kind)
+        return []
+
+    monkeypatch.setattr(search, "hybrid_search", hits)
+    from co_scientist.tools.builtins import library as tool_mod
+
+    async def ready(db, names):
+        return None
+
+    monkeypatch.setattr(tool_mod, "_unready_index", ready)
+    kinds = SearchLibraryTool.input_schema["properties"]["kind"]["enum"]
+    for kind in kinds:
+        await SearchLibraryTool().call({"query": "x", "kind": kind}, _atlas_ctx(Config()))
+    assert seen == kinds
