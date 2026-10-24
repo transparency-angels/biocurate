@@ -567,8 +567,11 @@ class Supervisor:
             try:
                 result = await agent.execute(final_task)
                 overview_path = result.extra.get("overview_path")
-                if overview_path:
-                    await sess_repo.set_final_overview(conn, session.id, overview_path)
+                if not overview_path:
+                    # A no-op (for example, no hypotheses yet) still needs a
+                    # separate final report alongside any dataset summary.
+                    overview_path = await self._write_simple_overview(conn, session)
+                await sess_repo.set_final_overview(conn, session.id, overview_path)
                 await task_repo.complete(conn, final_task.id)
             except Exception as e:
                 log.exception("final_overview_failed", err=str(e))
@@ -602,6 +605,16 @@ class Supervisor:
             f"**Hypotheses produced.** {len(hyps)}",
             "",
         ]
+        if (self.cfg.session_artifact_dir(session.id) / "data_analysis" / "summary.md").is_file():
+            parts.extend([
+                "## Dataset analysis", "",
+                "Survival statistics and plots are available in the separate "
+                "[dataset analysis summary](../data_analysis/summary.md).", "",
+            ])
+        if not hyps:
+            parts.extend([
+                "No hypotheses were generated before this session ended; a literature synthesis is not available.", "",
+            ])
         for i, h in enumerate(hyps, 1):
             parts.append(f"## {i}. {h.title or h.id}")
             parts.append(
@@ -609,7 +622,7 @@ class Supervisor:
                 f"— Elo `{h.elo:.0f}`" if h.elo is not None else
                 f"`{h.id}` — strategy `{h.strategy}` — state `{h.state}`"
             )
-            parts.append(h.summary or "(no summary)")
+            parts.append(h.full_text or h.summary or "(no summary)")
             reviews = await rev_repo.list_for_hypothesis(conn, h.id)
             if reviews:
                 parts.append("\n**Reviews:**")

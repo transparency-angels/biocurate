@@ -7,8 +7,9 @@ from pathlib import Path
 from ..analysis import DatasetNotFoundError, profile_dataset, tests_csv
 from ..logging import get_logger
 from ..models import Task, TaskResult
-from ..storage.artifacts import write_json, write_text
+from ..storage.artifacts import write_bytes, write_json, write_text
 from ..storage.repos import sessions as sess_repo
+from ..survival_plots import survival_plot_images
 from .base import BaseAgent
 
 log = get_logger("data_analysis")
@@ -36,6 +37,11 @@ class DataAnalysisAgent(BaseAgent):
             return TaskResult(kind="data_profiled", extra={"candidates": [], "summary": str(exc)})
         summary_md = report.pop("summary")
         tests = report.pop("tests")
+        for relative_path, body in survival_plot_images(report).items():
+            path = Path(relative_path)
+            await write_bytes(
+                self.deps.cfg, session.id, f"data_analysis/{path.parent}", path.stem, path.suffix, body,
+            )
         artifact_path = await write_json(
             self.deps.cfg, session.id, "data_analysis", "biomarker_candidates", report,
         )

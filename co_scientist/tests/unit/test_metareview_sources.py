@@ -152,6 +152,8 @@ async def test_hydration_refuses_paths_outside_the_data_dir(tmp_cfg) -> None:
     assert await agent._read_record("../../etc/passwd") == {}
     assert await agent._read_record(None) == {}
     assert await agent._read_record("artifacts/does-not-exist.json") == {}
+    assert await agent._dataset_summary("../../../../outside") == ""
+    assert await agent._dataset_summary("no_such_session") == ""
 
 
 def test_final_prompt_renders_sources_and_forbids_inventing_urls() -> None:
@@ -178,3 +180,19 @@ def test_final_prompt_without_sources_tells_the_model_to_say_so() -> None:
     )
 
     assert "no literature sources were recorded" in prompt
+
+
+def test_final_prompt_uses_dataset_results_for_a_separate_literature_overview() -> None:
+    from co_scientist.llm.prompts import render
+
+    prompt = render(
+        "metareview.final", goal="g", preferences="", system_feedback="",
+        top_hypotheses_block="data-driven hypothesis", sources="[S1] https://paper.example",
+        dataset_summary="Kaplan-Meier analysis; log-rank p = 0.001",
+    )
+    assert "Kaplan-Meier analysis; log-rank p = 0.001" in prompt
+    assert "# Executive summary" in prompt
+    assert "# Main research directions" in prompt
+    assert "# Sources" in prompt
+    assert "../data_analysis/summary.md" in prompt
+    assert "never invent" in prompt

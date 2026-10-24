@@ -5,7 +5,12 @@ You are an expert computational biologist and translational oncologist tasked wi
 - **Biomarker / Gene:** {{ candidate.biomarker }}
 - **Alteration Type:** {{ candidate.alteration_type }}
 - **Treatment / Drug:** {{ candidate.drug }}
+{% if candidate.survival_estimator | default('') == 'lifelines.KaplanMeierFitter' %}
+- **Observed Survival Association:** {{ candidate.relationship }} (Kaplan-Meier median difference: {{ candidate.delta_os_months if candidate.delta_os_months is not none else 'not estimable because a median was not reached' }}; log-rank p = {{ candidate.p_value }})
+- **Kaplan-Meier Median Survival (altered / unaltered):** {{ candidate.median_os_altered if candidate.median_os_altered is not none else 'not reached' }} / {{ candidate.median_os_wt if candidate.median_os_wt is not none else 'not reached' }} months.
+{% else %}
 - **Observed Clinical Effect:** {{ candidate.relationship }} (Median OS Difference: {{ candidate.delta_os_months }} months; p = {{ candidate.p_value }})
+{% endif %}
 - **Cohort Evidence:** {{ candidate.sample_size }} total samples analyzed ({{ candidate.altered_samples }} with {{ candidate.alteration_type }})
 {% else %}
 An empirical association between genomic alteration and drug response was observed in the study cohort.

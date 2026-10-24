@@ -233,6 +233,19 @@ class MetaReviewAgent(BaseAgent):
 
     # ----------------------------- final overview ----------------------------- #
 
+    async def _dataset_summary(self, session_id: str) -> str:
+        """Load the separate empirical report as context for literature synthesis."""
+        base = self.deps.cfg.data_dir.resolve()
+        path = (self.deps.cfg.session_artifact_dir(session_id) / "data_analysis" / "summary.md").resolve()
+        try:
+            path.relative_to(base)
+        except ValueError:
+            return ""
+        try:
+            return await asyncio.to_thread(path.read_text, encoding="utf-8")
+        except OSError:
+            return ""
+
     async def _final_overview(self, task: Task) -> TaskResult:
         session = await sess_repo.fetch(self.deps.db, task.session_id)
         if session is None:
@@ -274,6 +287,7 @@ class MetaReviewAgent(BaseAgent):
         all_reviews = [rv for group in reviews_by_hyp.values() for rv in group]
         hydrated_hyps, hydrated_reviews = await self._hydrate_sources(top, all_reviews)
         sources = self._source_block(hydrated_hyps, hydrated_reviews)
+        dataset_summary = await self._dataset_summary(session.id)
 
         prompt = render(
             "metareview.final",
@@ -282,6 +296,7 @@ class MetaReviewAgent(BaseAgent):
             system_feedback=latest_fb.text if latest_fb else "",
             top_hypotheses_block=top_block,
             sources=sources,
+            dataset_summary=dataset_summary,
         )
         r = route(self.deps.cfg, "metareview", "final")
         spec = AgentCallSpec(
@@ -307,6 +322,12 @@ class MetaReviewAgent(BaseAgent):
         text = self._final_text(resp)
         if not text.strip():
             text = "# Research overview\n\n_(No content was generated; see transcripts.)_"
+        if dataset_summary and "../data_analysis/summary.md" not in text:
+            text += (
+                "\n\n## Dataset analysis\n\n"
+                "Survival statistics and plots are available in the separate "
+                "[dataset analysis summary](../data_analysis/summary.md).\n"
+            )
 
         overview_path = await write_text(
             self.deps.cfg, session.id, "final", "overview", ".md", text

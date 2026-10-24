@@ -106,15 +106,20 @@ async def test_data_analysis_screening(
     assert top["biomarker"] == "GENE_X"
     assert top["alteration_type"] == alteration
     assert top["drug"] == "DRUG_A"
-    assert top["delta_os_months"] == -30
+    assert top["median_os_altered"] == 10
+    assert top["median_os_wt"] is None  # The unaltered group is entirely censored.
+    assert top["delta_os_months"] is None
     assert top["p_value"] < 0.05
     assert top["altered_samples"] == 15
     assert (agent.deps.cfg.data_dir / result.extra["artifact_path"]).is_file()
     audit_path = agent.deps.cfg.session_artifact_dir(task.session_id) / "data_analysis" / "statistical_tests.csv"
     assert audit_path.is_file()
-    assert "u_statistic" in audit_path.read_text()
+    assert "logrank_statistic" in audit_path.read_text()
     assert result.extra["methods"]["alpha"] == 0.05
     assert "Statistical methods and significance" in result.extra["summary"]
+    plot_path = agent.deps.cfg.session_artifact_dir(task.session_id) / "data_analysis" / "plots" / "kaplan_meier_1.png"
+    assert plot_path.read_bytes().startswith(b"\x89PNG")
+    assert "](plots/kaplan_meier_1.png)" in result.extra["summary"]
     assert not agent.deps.cfg.db_path.exists()
 
 
@@ -154,7 +159,7 @@ async def test_configured_relative_data_dir_is_independent_of_cwd(
     monkeypatch.setattr("co_scientist.config.PROJECT_ROOT", tmp_path)
     agent.deps.cfg.storage.data_dir = "./data"
     (tmp_path / "data").mkdir()
-    (tmp_path / "data" / "cohort.csv").write_text("id,drug,time\nS1,DRUG_A,12\n")
+    (tmp_path / "data" / "cohort.csv").write_text("id,drug,time,event\nS1,DRUG_A,12,0\n")
     other_cwd = tmp_path / "elsewhere"
     other_cwd.mkdir()
     monkeypatch.chdir(other_cwd)

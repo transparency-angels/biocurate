@@ -37,6 +37,8 @@ dependencies = [
     "faiss-cpu>=1.8.0",
     "numpy>=1.26.0",
     "scipy>=1.13.0",
+    "lifelines>=0.30,<0.31",
+    "matplotlib>=3.8",
     "scikit-learn>=1.5.0",
     # Web fetch + parsing
     "trafilatura>=1.12.0",

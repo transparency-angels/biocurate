@@ -300,12 +300,17 @@ def _render_hypothesis_md(record: dict[str, Any]) -> str:
     parts.append(f"**Hypothesis.** {record.get('statement', '')}")
     if record.get("data_evidence"):
         de = record["data_evidence"]
+        km = de.get("survival_estimator") == "lifelines.KaplanMeierFitter"
+        delta = de.get("delta_os_months", "N/A")
+        effect = "not estimable (KM median not reached)" if km and delta is None else f"{delta} mo"
+        effect_label = "Δ KM median survival" if km else "Δ OS"
+        p_label = "log-rank p" if km else "p"
         parts.append(
             f"## Empirical Data Evidence\n"
             f"- **Biomarker:** {de.get('biomarker', 'N/A')} ({de.get('alteration_type', 'alteration')})\n"
             f"- **Treatment:** {de.get('drug', 'N/A')}\n"
             f"- **Observed Effect:** {de.get('relationship', 'associated')} "
-            f"(Δ OS: {de.get('delta_os_months', 'N/A')} mo, p = {de.get('p_value', 'N/A')})\n"
+            f"({effect_label}: {effect}, {p_label} = {de.get('p_value', 'N/A')})\n"
             f"- **Cohort Sample Support:** {de.get('altered_samples', 'N/A')} altered / {de.get('sample_size', 'N/A')} total"
         )
     if record.get("mechanism"):
