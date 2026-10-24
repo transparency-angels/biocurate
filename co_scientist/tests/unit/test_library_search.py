@@ -55,3 +55,49 @@ async def test_rerank_without_key_passes_through() -> None:
     out = await rerank(Config(), "q", hits, 3)
     assert [h.anchor_id for h in out] == [h.anchor_id for h in hits[:3]]
     assert all(h.rerank_score is None for h in out)
+
+
+def _keyed_cfg() -> Config:
+    cfg = Config()
+    cfg.secrets.VOYAGE_API_KEY = "sk-super-secret"
+    return cfg
+
+
+async def test_rerank_maps_results_by_index(monkeypatch) -> None:
+    import types
+
+    import voyageai
+
+    class FakeClient:
+        def __init__(self, api_key=None):
+            pass
+
+        def rerank(self, query, documents, model, top_k):
+            r = [types.SimpleNamespace(index=2, relevance_score=0.9),
+                 types.SimpleNamespace(index=0, relevance_score=0.4)]
+            return types.SimpleNamespace(results=r)
+
+    monkeypatch.setattr(voyageai, "Client", FakeClient)
+    hits = [_hit(0), _hit(1), _hit(2)]
+    out = await rerank(_keyed_cfg(), "q", hits, 2)
+    assert [(h.anchor_id, h.rerank_score) for h in out] == [("PMC1#p2", 0.9), ("PMC1#p0", 0.4)]
+
+
+async def test_rerank_failure_passes_through(monkeypatch) -> None:
+    import voyageai
+    from structlog.testing import capture_logs
+
+    class FakeClient:
+        def __init__(self, api_key=None):
+            pass
+
+        def rerank(self, *a, **kw):
+            raise RuntimeError("429 for key sk-super-secret")
+
+    monkeypatch.setattr(voyageai, "Client", FakeClient)
+    hits = [_hit(0), _hit(1), _hit(2)]
+    with capture_logs() as logs:
+        out = await rerank(_keyed_cfg(), "q", hits, 2)
+    assert [h.anchor_id for h in out] == ["PMC1#p0", "PMC1#p1"]
+    assert all(h.rerank_score is None for h in out)
+    assert logs and "sk-super-secret" not in str(logs)

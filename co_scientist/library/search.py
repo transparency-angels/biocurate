@@ -136,6 +136,8 @@ async def rerank(cfg: Config, query: str, hits: list[LibraryHit], top_k: int) ->
 async def hybrid_search(
     conn: AtlasConn, cfg: Config, query: str, *, k: int = 8, kind: str | None = None
 ) -> list[LibraryHit]:
+    if k < 1:
+        raise ValueError("k must be >= 1")
     qvec = None
     if cfg.library.embedding == "client":
         from ..vectors.embedder import make_embedder
