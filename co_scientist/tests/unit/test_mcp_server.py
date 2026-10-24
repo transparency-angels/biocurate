@@ -276,3 +276,114 @@ def test_extract_urls_walks_nested_tool_results() -> None:
     assert set(extract_urls(body)) == {
         "https://a.example", "https://b.example", "https://c.example",
     }
+
+
+# --------------------------------------------------------------------------- #
+# search_library in the MCP process gets an Atlas connection
+
+
+@pytest.fixture
+def atlas_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CoScientistMcpServer:
+    from co_scientist.config import Config, StorageCfg
+
+    cfg = Config(storage=StorageCfg(backend="atlas"))
+    monkeypatch.setattr("co_scientist.mcp.server.load_config", lambda *a, **k: cfg)
+    monkeypatch.setenv("COSCI_CAPTURE_DIR", str(tmp_path / "cap"))
+    monkeypatch.setenv("COSCI_RECORD_TOOLS", "record_hypothesis")
+    monkeypatch.setenv("COSCI_AGENT", "generation")
+    return CoScientistMcpServer()
+
+
+async def test_mcp_research_search_library_gets_atlas_conn(
+    atlas_server: CoScientistMcpServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sentinel = object()
+    opened: list[object] = []
+    seen: list[object] = []
+
+    async def fake_connect(cfg: Any) -> object:
+        opened.append(cfg)
+        return sentinel
+
+    async def fake_call(args: dict[str, Any], ctx: Any) -> ToolResult:
+        seen.append(ctx.db)
+        return ToolResult(content={"n": 0, "hits": []}, duration_ms=1)
+
+    monkeypatch.setattr("co_scientist.storage.atlas.client.connect_atlas", fake_connect)
+    monkeypatch.setattr(atlas_server.research_tools["search_library"], "call", fake_call)
+    for _ in range(2):
+        res = await atlas_server.handle("search_library", {"query": "TREM2"})
+        assert res["isError"] is False
+    assert seen == [sentinel, sentinel]
+    assert len(opened) == 1  # cached after first use
+
+
+async def test_mcp_research_db_is_none_on_sqlite(server: CoScientistMcpServer) -> None:
+    assert await server._research_db() is None
+
+
+async def test_mcp_server_loads_overlay_from_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    overlay = tmp_path / "atlas.toml"
+    overlay.write_text('[storage]\nbackend = "atlas"\n')
+    monkeypatch.setenv("COSCI_CONFIG", str(overlay))
+    monkeypatch.setenv("COSCI_CAPTURE_DIR", str(tmp_path / "cap"))
+    monkeypatch.setenv("COSCI_AGENT", "generation")
+    srv = CoScientistMcpServer()
+    assert srv.cfg.storage.backend == "atlas"
+    assert "search_library" in srv.research_tools
+
+    sentinel = object()
+
+    async def fake_connect(cfg: Any) -> object:
+        return sentinel
+
+    monkeypatch.setattr("co_scientist.storage.atlas.client.connect_atlas", fake_connect)
+    assert await srv._research_db() is sentinel
+
+
+def test_mcp_server_loads_secrets_from_env_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    envf = tmp_path / "my.env"
+    envf.write_text("MONGODB_URI=mongodb://example/x\n")
+    monkeypatch.delenv("MONGODB_URI", raising=False)
+    monkeypatch.setenv("COSCI_ENV_FILE", str(envf))
+    monkeypatch.setenv("COSCI_CAPTURE_DIR", str(tmp_path / "cap"))
+    assert CoScientistMcpServer().cfg.secrets.MONGODB_URI == "mongodb://example/x"
+
+
+async def test_both_mcp_servers_shut_down_atlas_clients(monkeypatch, tmp_cfg) -> None:
+    from co_scientist.mcp import protocol, server, session_server
+    from co_scientist.storage.atlas import client as atlas_client
+
+    calls: list[str] = []
+
+    async def spy() -> None:
+        calls.append("shutdown")
+
+    async def serve_then_fail(self) -> None:
+        raise RuntimeError("transport died")
+
+    monkeypatch.setattr(atlas_client, "shutdown_clients", spy)
+    monkeypatch.setattr(protocol.McpStdioServer, "serve", serve_then_fail)
+    monkeypatch.setattr(session_server, "SessionMcpServer", lambda cfg: _FakeSrv(tmp_cfg))
+    monkeypatch.setattr(server, "CoScientistMcpServer", lambda: _FakeSrv(tmp_cfg))
+    with pytest.raises(RuntimeError):
+        await session_server.serve(tmp_cfg)
+    with pytest.raises(RuntimeError):
+        await server._amain()
+    assert calls == ["shutdown", "shutdown"]
+
+
+class _FakeSrv:
+    def __init__(self, cfg) -> None:
+        self.cfg, self.allow_start = cfg, False
+        self.record_tools, self.research_tools, self.agent = {}, {}, "a"
+
+    def tool_list(self) -> list:
+        return []
+
+    async def handle(self, name, args):  # pragma: no cover
+        return {}

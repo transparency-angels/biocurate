@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import os
 import subprocess
 import sys
@@ -44,8 +43,6 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-
-import aiosqlite
 
 from .. import ids
 from ..config import Config, load_config
@@ -60,10 +57,12 @@ from ..models import (
 from ..orchestrator.elo import update_elo
 from ..storage import db as db_mod
 from ..storage.artifacts import read_json, write_json
+from ..storage.atlas import client as atlas_client
 from ..storage.repos import feedback as fb_repo
 from ..storage.repos import hypotheses as hyp_repo
 from ..storage.repos import reviews as rev_repo
 from ..storage.repos import sessions as sess_repo
+from ..storage.repos import tasks as task_repo
 from ..storage.repos import tournaments as tourney_repo
 from .protocol import McpStdioServer, log, text_result
 
@@ -468,6 +467,13 @@ class SessionMcpServer:
         finally:
             await conn.close()
 
+    def _config_args(self) -> list[str]:
+        """`-c <overlay>` so a spawned run uses the same config (and backend) as this server."""
+        path = self.cfg._overlay_path
+        if path is None and (env := os.environ.get("COSCI_CONFIG")):
+            path = Path(env).resolve()
+        return ["-c", str(path)] if path is not None else []
+
     # ----------------------------- lifecycle ----------------------------- #
 
     async def _t_session_start(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -481,7 +487,7 @@ class SessionMcpServer:
         if not ready:
             raise _ToolError(f"LLM backend is not ready: {detail}. Call doctor for details.")
 
-        argv = [sys.executable, "-m", "co_scientist.cli", "run", goal]
+        argv = [sys.executable, "-m", "co_scientist.cli", *self._config_args(), "run", goal]
         if (n := args.get("n_initial")) is not None:
             argv += ["--n", str(int(n))]
         if (b := args.get("budget_usd")) is not None:
@@ -526,7 +532,9 @@ class SessionMcpServer:
         log_path = self.cfg.data_dir / "logs" / f"resume-{int(time.time())}.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         pid = _spawn_detached(
-            [sys.executable, "-m", "co_scientist.cli", "resume", session_id], log_path
+            [sys.executable, "-m", "co_scientist.cli", *self._config_args(),
+             "resume", session_id],
+            log_path,
         )
         return text_result({"session_id": session_id, "pid": pid, "log_path": str(log_path)})
 
@@ -547,53 +555,29 @@ class SessionMcpServer:
 
     async def _t_session_list(self, args: dict[str, Any]) -> dict[str, Any]:
         limit = _clamp_int(args.get("limit"), default=20, low=1, high=200)
-        async with self._db() as conn, conn.execute(
-            """SELECT id, status, research_goal, created_at, updated_at,
-                          budget_usd, budget_used_usd,
-                          (SELECT COUNT(*) FROM hypotheses WHERE session_id = s.id) AS n_hypotheses,
-                          (SELECT MAX(elo) FROM hypotheses WHERE session_id = s.id) AS top_elo
-                     FROM sessions s
-                    ORDER BY updated_at DESC
-                    LIMIT ?""",
-            (limit,),
-        ) as cur:
-            rows = [dict(r) for r in await cur.fetchall()]
+        async with self._db() as conn:
+            stats = await sess_repo.list_with_stats(conn, limit=limit)
+        rows = [
+            {("n_hypotheses" if k == "n_hyps" else k): v for k, v in r.items()}
+            for r in stats
+        ]
         return text_result({"sessions": rows, "count": len(rows)})
 
     async def _t_session_status(self, args: dict[str, Any]) -> dict[str, Any]:
         session_id = _require_str(args, "session_id")
         async with self._db() as conn:
-            async with conn.execute(
-                "SELECT * FROM sessions WHERE id = ?", (session_id,)
-            ) as cur:
-                row = await cur.fetchone()
-            if row is None:
+            out = await sess_repo.fetch_row(conn, session_id)
+            if out is None:
                 raise _ToolError(f"no such session: {session_id}")
-            out = dict(row)
-            for col in ("research_plan", "config_snapshot"):
-                with contextlib.suppress(Exception):
-                    out[col] = json.loads(out[col])
-            out["task_counts"] = await _count_by(
-                conn, "SELECT status AS k, COUNT(*) AS n FROM tasks WHERE session_id=? GROUP BY status",
-                session_id,
-            )
-            out["hypothesis_states"] = await _count_by(
-                conn,
-                "SELECT state AS k, COUNT(*) AS n FROM hypotheses WHERE session_id=? GROUP BY state",
-                session_id,
-            )
+            out["task_counts"] = await task_repo.count_by_status(conn, session_id)
+            out["hypothesis_states"] = await hyp_repo.count_by_state(conn, session_id)
             out["matches_played"] = await tourney_repo.count_matches(conn, session_id)
-            async with conn.execute(
-                """SELECT MIN(elo) AS lo, MAX(elo) AS hi, COUNT(elo) AS n
-                     FROM hypotheses WHERE session_id=? AND elo IS NOT NULL""",
-                (session_id,),
-            ) as cur:
-                elo = dict(await cur.fetchone() or {})
+            lo, hi, n_ranked = await hyp_repo.elo_range(conn, session_id)
             out["elo"] = {
-                "min": elo.get("lo"),
-                "max": elo.get("hi"),
-                "spread": (elo["hi"] - elo["lo"]) if elo.get("n") else None,
-                "ranked": elo.get("n", 0),
+                "min": lo,
+                "max": hi,
+                "spread": (hi - lo) if n_ranked else None,
+                "ranked": n_ranked,
             }
             out["has_overview"] = bool(out.get("final_overview"))
         return text_result(out)
@@ -643,15 +627,16 @@ class SessionMcpServer:
                 artifact = await read_json(self.cfg, h.artifact_path)
             matches: list[dict[str, Any]] = []
             if include_matches:
-                async with conn.execute(
-                    """SELECT id, hyp_a, hyp_b, mode, winner, elo_a_before, elo_b_before,
-                              elo_a_after, elo_b_after, rationale, created_at
-                         FROM tournament_matches
-                        WHERE hyp_a=? OR hyp_b=?
-                        ORDER BY created_at""",
-                    (hypothesis_id, hypothesis_id),
-                ) as cur:
-                    matches = [dict(r) for r in await cur.fetchall()]
+                matches = [
+                    {
+                        "id": m.id, "hyp_a": m.hyp_a, "hyp_b": m.hyp_b, "mode": m.mode,
+                        "winner": m.winner,
+                        "elo_a_before": m.elo_a_before, "elo_b_before": m.elo_b_before,
+                        "elo_a_after": m.elo_a_after, "elo_b_after": m.elo_b_after,
+                        "rationale": m.rationale, "created_at": m.created_at.isoformat(),
+                    }
+                    for m in await tourney_repo.list_for_hypothesis(conn, hypothesis_id)
+                ]
         return text_result({
             "hypothesis": h.model_dump(mode="json"),
             "artifact": artifact,
@@ -671,18 +656,16 @@ class SessionMcpServer:
 
     async def _t_overview_get(self, args: dict[str, Any]) -> dict[str, Any]:
         session_id = _require_str(args, "session_id")
-        async with self._db() as conn, conn.execute(
-            "SELECT final_overview FROM sessions WHERE id = ?", (session_id,)
-        ) as cur:
-            row = await cur.fetchone()
-        if row is None:
+        async with self._db() as conn:
+            session = await sess_repo.fetch(conn, session_id)
+        if session is None:
             raise _ToolError(f"no such session: {session_id}")
-        if not row["final_overview"]:
+        if not session.final_overview:
             raise _ToolError(
                 f"session {session_id} has no final overview yet. "
                 "Check session_status; the overview is written when the session finalizes."
             )
-        path = self.cfg.data_dir / row["final_overview"]
+        path = self.cfg.data_dir / session.final_overview
         return text_result({
             "session_id": session_id,
             "path": str(path),
@@ -954,10 +937,8 @@ class SessionMcpServer:
     # ------------------------------ helpers ------------------------------ #
 
     async def _session_ids_since(self, iso_ts: str) -> set[str]:
-        async with self._db() as conn, conn.execute(
-            "SELECT id FROM sessions WHERE created_at >= ?", (iso_ts,)
-        ) as cur:
-            return {r["id"] for r in await cur.fetchall()}
+        async with self._db() as conn:
+            return set(await sess_repo.ids_created_since(conn, iso_ts))
 
     async def _await_new_session(self, goal: str, known: set[str]) -> str | None:
         """Poll for the session row the spawned run is about to write.
@@ -967,13 +948,10 @@ class SessionMcpServer:
         """
         deadline = time.monotonic() + self.start_timeout
         while time.monotonic() < deadline:
-            async with self._db() as conn, conn.execute(
-                "SELECT id FROM sessions WHERE research_goal = ? ORDER BY created_at DESC",
-                (goal,),
-            ) as cur:
-                for row in await cur.fetchall():
-                    if row["id"] not in known:
-                        return str(row["id"])
+            async with self._db() as conn:
+                for sid in await sess_repo.ids_for_goal(conn, goal):
+                    if sid not in known:
+                        return str(sid)
             await asyncio.sleep(_START_POLL_SECONDS)
         return None
 
@@ -1023,11 +1001,6 @@ def _check_evidence(evidence: Any) -> None:
                 )
 
 
-async def _count_by(conn: aiosqlite.Connection, sql: str, session_id: str) -> dict[str, int]:
-    async with conn.execute(sql, (session_id,)) as cur:
-        return {r["k"]: r["n"] for r in await cur.fetchall()}
-
-
 def _iso_now_floor() -> str:
     """UTC now, one second early, to survive clock granularity in created_at."""
     return datetime.fromtimestamp(time.time() - 1, tz=UTC).isoformat()
@@ -1073,12 +1046,15 @@ async def serve(cfg: Config | None = None) -> None:
         f"[session-mcp] db={server.cfg.db_path} "
         f"tools={len(TOOL_SCHEMAS)} start_allowed={server.allow_start}"
     )
-    await McpStdioServer(
-        name=SERVER_NAME,
-        version=SERVER_VERSION,
-        tools=server.tool_list(),
-        handler=server.handle,
-    ).serve()
+    try:
+        await McpStdioServer(
+            name=SERVER_NAME,
+            version=SERVER_VERSION,
+            tools=server.tool_list(),
+            handler=server.handle,
+        ).serve()
+    finally:
+        await atlas_client.shutdown_clients()
 
 
 def main(cfg: Config | None = None) -> None:

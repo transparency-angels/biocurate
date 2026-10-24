@@ -480,3 +480,40 @@ async def test_a_hung_cli_is_killed_at_the_timeout(
         await asyncio.wait_for(provider.call(_spec(tools=[]), _ctx()), timeout=20)
 
     assert "timed out" in str(e.value)
+
+
+def test_mcp_config_propagates_overlay_path(
+    provider: ClaudeCliProvider, tmp_path: Path
+) -> None:
+    overlay = tmp_path / "atlas.toml"
+    overlay.write_text('[storage]\nbackend = "atlas"\n')
+    from co_scientist.config import load_config
+
+    provider._cfg._overlay_path = load_config(overlay)._overlay_path
+    env = provider.mcp_config(
+        capture_dir=tmp_path, record_tools=[], agent="generation", ctx=_ctx(),
+    )["mcpServers"]["cosci"]["env"]
+    assert env["COSCI_CONFIG"] == str(overlay.resolve())
+
+
+def test_mcp_config_has_no_config_env_without_overlay(
+    provider: ClaudeCliProvider, tmp_path: Path
+) -> None:
+    env = provider.mcp_config(
+        capture_dir=tmp_path, record_tools=[], agent="generation", ctx=_ctx(),
+    )["mcpServers"]["cosci"]["env"]
+    assert "COSCI_CONFIG" not in env
+
+
+def test_mcp_config_propagates_env_file_path_but_no_secret_values(
+    provider: ClaudeCliProvider, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / ".env").write_text("MONGODB_URI=mongodb+srv://u:topsecret@h/\n")
+    monkeypatch.chdir(tmp_path)
+    mcp = provider.mcp_config(
+        capture_dir=tmp_path, record_tools=[], agent="generation", ctx=_ctx(),
+    )
+    assert mcp["mcpServers"]["cosci"]["env"]["COSCI_ENV_FILE"] == str(
+        (tmp_path / ".env").resolve()
+    )
+    assert "topsecret" not in json.dumps(mcp)

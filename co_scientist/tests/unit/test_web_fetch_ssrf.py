@@ -151,6 +151,7 @@ def test_extract_meta_refresh_url() -> None:
 @pytest.mark.asyncio
 async def test_web_fetch_ignores_poisoned_empty_cache(tmp_path) -> None:
     import json
+
     from co_scientist.ids import url_hash
 
     cfg = Config()
@@ -179,6 +180,7 @@ async def test_web_fetch_ignores_poisoned_empty_cache(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_web_fetch_does_not_cache_empty_extraction(tmp_path, monkeypatch) -> None:
     import httpx
+
     from co_scientist.ids import url_hash
 
     cfg = Config()
@@ -192,11 +194,13 @@ async def test_web_fetch_does_not_cache_empty_extraction(tmp_path, monkeypatch) 
         "co_scientist.tools.web_fetch._extract_html", lambda _html, _url: ("", None)
     )
 
+    page_url = httpx.URL(url)  # class bodies can't see the enclosing function's locals
+
     class _DummyStream:
         status_code = 200
-        url = httpx.URL(url)
+        url = page_url
         headers = httpx.Headers({"content-type": "text/html"})
-        history: list = []
+        history: tuple = ()
 
         async def __aenter__(self):
             return self

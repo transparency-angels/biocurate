@@ -1,78 +1,23 @@
-"""Span repository — OpenTelemetry-shaped spans persisted into SQLite.
-
-We keep the schema OTel-compatible so a future exporter can stream rows out
-without re-shaping. For now everything is one-process and lives here.
-"""
+"""Backend-dispatching `spans` repository."""
 
 from __future__ import annotations
 
-import json
-import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
-import aiosqlite
+from .. import Conn
+from ..atlas import spans as _atlas
+from ..sqlite import spans as _sql
+from ._dispatch import dual
 
-from ...ids import span_id as new_span_id
-
-
-async def start(
-    conn: aiosqlite.Connection,
-    *,
-    trace_id: str,
-    parent_span_id: str | None,
-    session_id: str | None,
-    task_id: str | None,
-    name: str,
-    attrs: dict[str, Any] | None = None,
-) -> str:
-    sid = new_span_id()
-    await conn.execute(
-        """INSERT INTO spans(span_id, trace_id, parent_span_id, session_id, task_id,
-                              name, started_at, ended_at, attrs_json, status)
-           VALUES (?,?,?,?,?,?,?,NULL,?,'unset')""",
-        (
-            sid, trace_id, parent_span_id, session_id, task_id, name,
-            int(time.time() * 1000), json.dumps(attrs or {}),
-        ),
-    )
-    await conn.commit()
-    return sid
-
-
-async def end(
-    conn: aiosqlite.Connection,
-    span_id_: str,
-    *,
-    status: str = "ok",
-    attrs: dict[str, Any] | None = None,
-) -> None:
-    if attrs is not None:
-        # merge attrs
-        async with conn.execute("SELECT attrs_json FROM spans WHERE span_id=?", (span_id_,)) as cur:
-            row = await cur.fetchone()
-        prev = json.loads(row["attrs_json"]) if row and row["attrs_json"] else {}
-        prev.update(attrs)
-        attrs_json: str | None = json.dumps(prev)
-    else:
-        attrs_json = None
-    if attrs_json is None:
-        await conn.execute(
-            "UPDATE spans SET ended_at=?, status=? WHERE span_id=?",
-            (int(time.time() * 1000), status, span_id_),
-        )
-    else:
-        await conn.execute(
-            "UPDATE spans SET ended_at=?, status=?, attrs_json=? WHERE span_id=?",
-            (int(time.time() * 1000), status, attrs_json, span_id_),
-        )
-    await conn.commit()
+start = dual(_sql.start, _atlas.start)
+end = dual(_sql.end, _atlas.end)
 
 
 @asynccontextmanager
 async def span(
-    conn: aiosqlite.Connection,
+    conn: Conn,
     *,
     trace_id: str,
     parent_span_id: str | None,
@@ -81,6 +26,7 @@ async def span(
     name: str,
     attrs: dict[str, Any] | None = None,
 ) -> AsyncIterator[str]:
+    """Open a span; ends it ok on exit, or with status=error if the body raises."""
     sid = await start(
         conn,
         trace_id=trace_id,

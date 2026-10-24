@@ -27,7 +27,6 @@ from ..config import Config, CookiePolicyMode
 from ..ids import url_hash
 from .base import ToolCtx, ToolResult
 
-
 # Non-essential cookie names, prefixes, and substrings (analytics, advertising,
 # cross-site tracking, marketing automation, telemetry, and consent banners).
 # Refused even when the fallback essential-only cookie jar is used.
@@ -220,9 +219,7 @@ class _EssentialOnlyCookiePolicy(DefaultCookiePolicy):
         req_host = _request_hostname(request, self._origin_host)
         if not _is_same_party_domain(cookie.domain, self._origin_host):
             return False
-        if not _is_same_party_domain(cookie.domain, req_host):
-            return False
-        return True
+        return _is_same_party_domain(cookie.domain, req_host)
 
     def set_ok(self, cookie: Cookie, request: Any) -> bool:
         if not self.is_cookie_allowed(cookie, request):
@@ -324,9 +321,7 @@ def _is_challenge_stub(text: str, status: int) -> bool:
     cleaned = (text or "").strip().lower()
     if not cleaned:
         return False
-    if len(cleaned) < 400 and any(m in cleaned for m in _CHALLENGE_STUB_MARKERS):
-        return True
-    return False
+    return len(cleaned) < 400 and any(m in cleaned for m in _CHALLENGE_STUB_MARKERS)
 
 
 def _parse_biomed_url(url: str) -> tuple[str | None, str | None]:

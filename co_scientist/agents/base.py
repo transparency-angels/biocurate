@@ -5,12 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-import aiosqlite
-
 from ..config import Config
 from ..llm.provider import LLMProvider
 from ..models import Task, TaskResult
 from ..safety.quoting import SAFETY_PREAMBLE, SYSTEM_CITATION_POLICY
+from ..storage import Conn
 from ..tools.registry import AGENT_TOOLS, ToolRegistry
 
 
@@ -19,7 +18,7 @@ class AgentDeps:
     """Bundle of resources every agent needs."""
 
     cfg: Config
-    db: aiosqlite.Connection
+    db: Conn
     llm: LLMProvider
     tools: ToolRegistry
 

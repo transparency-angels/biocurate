@@ -64,7 +64,7 @@ def _install_stdlib_shims_if_needed() -> None:
 
     # Minimal HTML text + title extractor fallback when trafilatura is absent
     class _ArticleHTMLParser(html.parser.HTMLParser):
-        _SKIP = {"script", "style", "noscript", "svg", "nav", "footer", "header"}
+        _SKIP = frozenset({"script", "style", "noscript", "svg", "nav", "footer", "header"})
 
         def __init__(self) -> None:
             super().__init__()

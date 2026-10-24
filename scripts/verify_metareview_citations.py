@@ -13,7 +13,6 @@ Tests:
 from __future__ import annotations
 
 import importlib.util
-import re
 import sys
 import types
 from pathlib import Path
@@ -25,12 +24,17 @@ sys.path.insert(0, str(WORKSPACE))
 # Lightweight mock finder for third-party libraries (pydantic, ulid, jinja2)
 # allowing this verification to run standalone in any standard Python environment.
 class DummyBase:
-    def __init_subclass__(cls, **kw): pass
+    def __init_subclass__(cls, **kw):
+        pass
+
     def __init__(self, **kw):
-        for k, v in kw.items(): setattr(self, k, v)
+        for k, v in kw.items():
+            setattr(self, k, v)
+
     def model_copy(self, update=None):
         d = dict(self.__dict__)
-        if update: d.update(update)
+        if update:
+            d.update(update)
         return DummyBase(**d)
 
 class AutoMock(types.ModuleType):
@@ -58,9 +62,10 @@ class MockFinder:
 
 sys.meta_path.insert(0, MockFinder())
 
-from co_scientist.agents.metareview import MetaReviewAgent
-from co_scientist.models.hypothesis import CitedPaper
-from co_scientist.models.review import Evidence
+# Imported after the module mocks above are installed on sys.meta_path.
+from co_scientist.agents.metareview import MetaReviewAgent  # noqa: E402
+from co_scientist.models.hypothesis import CitedPaper  # noqa: E402
+from co_scientist.models.review import Evidence  # noqa: E402
 
 
 def test_extract_line_range():
@@ -198,7 +203,7 @@ def test_prompts_and_policies():
 
     from co_scientist.safety.citation_verifier import _normalize
     norm = _normalize("[S1, L3-L5] The anti-inflammatory role of butyrate")
-    assert "the anti-inflammatory role of butyrate" == norm
+    assert norm == "the anti-inflammatory role of butyrate"
     print(f"  PASS: CitationVerifier._normalize stripped line/source tag prefix cleanly: {norm!r}")
 
 

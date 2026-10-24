@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from datetime import UTC, datetime
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+from structlog.testing import capture_logs
+
+from co_scientist.agents import ranking as ranking_mod
 from co_scientist.agents.ranking import RankingAgent, _parse_better_idea
 from co_scientist.config import Config
 from co_scientist.models import Hypothesis
@@ -96,3 +103,82 @@ def test_nearest_elo_picks_closest() -> None:
 def test_nearest_elo_empty_pool() -> None:
     target = _h(hid="t", elo=1300, matches=0)
     assert _agent()._nearest_elo(target, []) is None
+
+
+# ------------------------- output cap / invalid verdict ------------------------- #
+
+def test_ranking_cfg_default_max_output_tokens() -> None:
+    from co_scientist.config import load_config
+
+    assert Config().ranking.max_output_tokens == 8192
+    assert load_config().ranking.max_output_tokens == 8192
+    assert "max_output_tokens = 8192" in Path("config/default.toml").read_text()
+
+
+def _fake_llm(text: str, stop_reason: str, seen: list):
+    class _LLM:
+        async def call(self, spec, ctx):
+            seen.append(spec)
+            raw = SimpleNamespace(
+                content=[SimpleNamespace(type="text", text=text)], stop_reason=stop_reason,
+            )
+            return SimpleNamespace(raw=raw, transcript_id="tr_1")
+
+    return _LLM()
+
+
+def _run_one_match(monkeypatch: pytest.MonkeyPatch, cfg: Config, llm) -> object:
+    plan = SimpleNamespace(objective="o", preferences=["p"], idea_attributes=["i"])
+    session = SimpleNamespace(id="ses", research_goal="g", research_plan=plan)
+    a, b = _h(hid="a", elo=1200, matches=0), _h(hid="b", elo=1200, matches=0)
+
+    async def fetch(db, sid):
+        return session
+
+    async def list_for_session(db, sid, state=None):
+        return [a, b]
+
+    async def select_pair(self, sid, cands, focus_id=None):
+        return a, b, 0.5
+
+    async def best_review(self, hid):
+        return None
+
+    async def insert_match(db, m):
+        return None
+
+    monkeypatch.setattr(ranking_mod.sess_repo, "fetch", fetch)
+    monkeypatch.setattr(ranking_mod.hyp_repo, "list_for_session", list_for_session)
+    monkeypatch.setattr(ranking_mod.tourney_repo, "insert_match", insert_match)
+    monkeypatch.setattr(RankingAgent, "_select_pair", select_pair)
+    monkeypatch.setattr(RankingAgent, "_best_review", best_review)
+    deps = SimpleNamespace(cfg=cfg, db=object(), llm=llm)
+    task = SimpleNamespace(
+        id="tsk_1", session_id="ses", payload={}, target_id=None, action="RunTournamentBatch",
+    )
+    return RankingAgent(deps)._run_tournament_batch(task)
+
+
+async def test_ranking_uses_configured_max_output_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = Config()
+    cfg.ranking.max_output_tokens = 1234
+    seen: list = []
+    llm = _fake_llm("hm\nbetter idea: 1", "end_turn", seen)
+    # Elo update follows a valid verdict; stop once the call has been made.
+    with suppress(Exception):
+        await _run_one_match(monkeypatch, cfg, llm)
+    assert seen and seen[0].max_output_tokens == 1234
+
+
+async def test_ranking_invalid_verdict_logs_stop_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list = []
+    llm = _fake_llm("cut off mid-sentence", "max_tokens", seen)
+    with capture_logs() as logs:
+        result = await _run_one_match(monkeypatch, Config(), llm)
+    assert result.extra == {"reason": "unparseable verdict"}
+    warn = [e for e in logs if e["event"] == "ranking_invalid_verdict"]
+    assert warn and warn[0]["stop_reason"] == "max_tokens"

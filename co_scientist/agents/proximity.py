@@ -16,8 +16,9 @@ from ..logging import get_logger
 from ..models import Task, TaskResult
 from ..storage.repos import embeddings as emb_repo
 from ..storage.repos import hypotheses as hyp_repo
+from ..vectors.base import VectorStore
 from ..vectors.embedder import make_embedder
-from ..vectors.store import FaissStore
+from ..vectors.factory import make_vector_store
 from .base import BaseAgent
 
 log = get_logger("proximity")
@@ -36,7 +37,9 @@ class ProximityAgent(BaseAgent):
             log.warning("proximity_no_embedder", err=str(e))
             return TaskResult(kind="noop", extra={"reason": "no embedder configured"})
 
-        store = FaissStore(self.deps.cfg, session_id, dim=embedder.dim)
+        store = make_vector_store(
+            self.deps.cfg, self.deps.db, session_id, dim=embedder.dim
+        )
         await store.load_or_create()
 
         hyps = await hyp_repo.list_for_session(self.deps.db, session_id)
@@ -88,7 +91,7 @@ class ProximityAgent(BaseAgent):
     # ----------------------------- clustering ----------------------------- #
 
     async def _cluster(
-        self, store: FaissStore, *, threshold: float
+        self, store: VectorStore, *, threshold: float
     ) -> dict[str, str] | None:
         """Run sklearn agglomerative clustering on the cosine distance matrix.
 
@@ -100,7 +103,7 @@ class ProximityAgent(BaseAgent):
         from sklearn.cluster import AgglomerativeClustering
 
         n = store.n
-        if n < 2 or store.index is None:
+        if n < 2:
             return None
         sim = await store.cosine_matrix()    # locked + threaded
         dist = 1.0 - sim
@@ -120,9 +123,10 @@ class ProximityAgent(BaseAgent):
 
         labels = await asyncio.to_thread(_do)
         out: dict[str, str] = {}
+        row_ids = store.ids()
         for i, label in enumerate(labels):
-            hid = store.hypothesis_at(i)
-            if hid is None:
+            if i >= len(row_ids):
                 continue
+            hid = row_ids[i]
             out[hid] = f"c{int(label):04d}"
         return out

@@ -17,6 +17,7 @@ in Python, running on an API key **or** on your Claude Code / Codex subscription
 
 [Quickstart](#quickstart) ·
 [How it works](#how-it-works) ·
+[Built on MongoDB Atlas](#built-on-mongodb-atlas) ·
 [Use it from Claude Code or Codex](#use-it-from-claude-code-or-codex) ·
 [Bench results](docs/BENCH_RESULTS.md) ·
 [Contributing](CONTRIBUTING.md)
@@ -44,7 +45,7 @@ matches. Meta-review synthesises the whole session into a research overview.
 
 What comes out is not a chat answer. It is a ranked leaderboard with the
 reviews, the debate rationales, the citations and the full provenance behind
-each entry, all in a local SQLite database you can query.
+each entry, all in a local SQLite database you can query, or in MongoDB Atlas (see [Built on MongoDB Atlas](#built-on-mongodb-atlas)).
 
 ## Why this one
 
@@ -53,11 +54,92 @@ each entry, all in a local SQLite database you can query.
 | **Faithful to the paper** | The agent roster, the prompts and the control flow follow Gottweis et al. The per-agent prompts in [`config/prompts/`](config/prompts/) come from the paper's supplement. |
 | **Runs on a subscription** | Point it at `claude -p` or `codex exec` and it bills nothing per token. Structured output and citation provenance come back through a bundled MCP server. |
 | **Or any model you like** | OpenRouter by default, so one key reaches 200+ models and `[models]` can give each agent a different vendor. Anthropic, OpenAI, Gemini, Groq, Together, Mistral and Ollama work directly. |
-| **Durable, resumable runs** | A SQLite-backed task queue with leases, dead-lettering and resume. Kill it mid-session and `resume` picks up where it stopped. |
+| **Durable, resumable runs** | A task queue (SQLite or Atlas) with leases, dead-lettering and resume. Kill it mid-session and `resume` picks up where it stopped. |
 | **Citations you can check** | An agent may only cite a URL it actually fetched. Every evidence row carries a URL and an excerpt, and a verifier enforces both. |
 | **Driveable by coding agents** | [`plugin/`](plugin/) is an Agent Plugins 1.0 package: one MCP server and seven skills that work in Claude Code, Codex CLI, Cursor, VS Code, Copilot and Kiro. |
 | **Measured, not asserted** | `co-scientist bench` settles N models on one goal in a shared Elo tournament with gold-set recall scoring. Every run ever done is in [`docs/BENCH_RESULTS.md`](docs/BENCH_RESULTS.md). |
-| **Tested** | 418 unit tests, all offline. No key, no network, no subscription quota to run the suite. |
+| **Tested** | ~550 offline tests, plus the same repo contract tests against Atlas when `CO_SCI_ATLAS_TESTS=1`. On the default `sqlite` backend the suite needs no key, no network and no subscription quota. |
+
+## Built on MongoDB Atlas
+
+Set `[storage] backend = "atlas"` and the whole system (sessions, hypotheses, the
+task queue, the Elo tournament, events, the evidence library) runs on a MongoDB
+Atlas cluster instead of local SQLite. SQLite stays the default.
+
+| Atlas / Voyage feature | What it does in biocurate | Code |
+| --- | --- | --- |
+| **Atlas as the core store** | Every repo (sessions, hypotheses, reviews, tasks, tournaments, events, spans, transcripts, feedback, embeddings) has a SQLite and an Atlas implementation behind one dispatcher, chosen by `[storage] backend`. | [`storage/repos/`](co_scientist/storage/repos/), [`storage/atlas/`](co_scientist/storage/atlas/) |
+| **Atomic task claims** | Workers claim a task with a single `find_one_and_update`; a unique partial index on `tasks.idempotency_key` makes enqueue idempotent. | [`storage/atlas/tasks.py`](co_scientist/storage/atlas/tasks.py), [`storage/atlas/indexes.py`](co_scientist/storage/atlas/indexes.py) |
+| **Multi-document transaction** | An Elo update writes an `elo_journal` entry (keyed by match id) and both hypotheses' ratings in one `with_transaction`. Re-applying a match hits the duplicate key and is a no-op. | [`storage/atlas/tournaments.py`](co_scientist/storage/atlas/tournaments.py) |
+| **Atlas Search** (`library_text`, `lucene.english`) | Keyword leg of library retrieval over passage `text` and paper `title`, with a `kind` filter. | [`storage/atlas/indexes.py`](co_scientist/storage/atlas/indexes.py), [`library/search.py`](co_scientist/library/search.py) |
+| **Automated Embedding** (`library_vec`, `autoEmbed`, `voyage-4`) | Atlas embeds each passage on write and the query text at search time, so ingest sends no vectors. `library.embedding = "client"` switches to Voyage embeddings computed in Python. | [`storage/atlas/indexes.py`](co_scientist/storage/atlas/indexes.py) (`library_vec_definition`), [`library/ingest.py`](co_scientist/library/ingest.py) |
+| **Atlas Vector Search** (`hyp_vec`) | Duplicate detection when a hypothesis is generated or evolved, and Ranking's pair similarity. `dotProduct` index with a `session_id` filter; falls back to exact in-memory search while the index is building or returns too few hits. | [`vectors/atlas_store.py`](co_scientist/vectors/atlas_store.py), [`vectors/factory.py`](co_scientist/vectors/factory.py) |
+| **Hybrid Search** (`$rankFusion`) | One aggregation fuses a `$search` branch and a text-query `$vectorSearch` branch (equal weights). | [`library/search.py`](co_scientist/library/search.py) (`build_hybrid_pipeline`) |
+| **Voyage AI** | `voyage-3-large` embeddings for hypotheses, `voyage-4` for library autoEmbed, and `rerank-2.5` over the fused hits (skipped without a key, and the fused order is kept). | [`vectors/embedder.py`](co_scientist/vectors/embedder.py), [`library/search.py`](co_scientist/library/search.py) (`rerank`) |
+| **`search_library` agent tool** | Generation, Reflection and Evolution can call it for hybrid search over the library. Inert unless the backend is `atlas`. | [`tools/builtins/library.py`](co_scientist/tools/builtins/library.py), [`tools/registry.py`](co_scientist/tools/registry.py) |
+
+Atlas Stream Processing is not used.
+
+```mermaid
+flowchart LR
+  subgraph Agents
+    GEN[Generation / Evolution]
+    REF[Reflection]
+    RNK[Ranking]
+    SUP[Supervisor + workers]
+  end
+  subgraph Atlas["MongoDB Atlas (db biocurate)"]
+    LIB[("library<br/>anchored passages")]
+    HV[("hypothesis_vectors")]
+    HYP[("hypotheses")]
+    MAT[("tournament_matches")]
+    ELO[("elo_journal")]
+    TASK[("tasks")]
+    EVT[("events, spans, transcripts,<br/>reviews, sessions")]
+  end
+  LIB --- I1{{"library_text<br/>Atlas Search"}}
+  LIB --- I2{{"library_vec<br/>autoEmbed voyage-4"}}
+  HV --- I3{{"hyp_vec<br/>Vector Search"}}
+  GEN -- "search_library: $rankFusion + Voyage rerank" --> LIB
+  REF -- "search_library" --> LIB
+  GEN -- "dedup query / add" --> HV
+  RNK -- "pair similarity" --> HV
+  GEN --> HYP
+  RNK -- "transaction" --> ELO
+  RNK -- "transaction" --> HYP
+  RNK --> MAT
+  SUP -- "find_one_and_update" --> TASK
+  SUP --> EVT
+```
+
+### How to run on Atlas
+
+1. In `.env` (copied from [`.env.example`](.env.example)) set `MONGODB_URI` and `VOYAGE_API_KEY`. The cluster must support Atlas Search and Vector Search; `$rankFusion` needs MongoDB 8.0+.
+2. In your config TOML set:
+   ```toml
+   [storage]
+   backend = "atlas"
+   atlas_db = "biocurate"
+   ```
+3. `co-scientist init` connects, creates the B-tree indexes and the three search indexes (`library_text`, `library_vec`, `hyp_vec`) if missing.
+4. Build an evidence library: `co-scientist library ingest "TREM2 microglia Alzheimer's" --max-papers 15`, then `co-scientist library stats` until both library indexes report `queryable=True`.
+5. Check retrieval: `co-scientist library search "TREM2 and amyloid plaque compaction" --k 5` prints anchors with fused and rerank scores.
+6. Run a session as usual: `co-scientist run "<goal>" --n 3 --budget-usd 2.0`, and watch it with `co-scientist serve`.
+
+### Anchored passages
+
+Ingest fetches open-access full text from Europe PMC (JATS XML) and splits it
+into passages whose `_id` is an anchor: `PMC…#abstract.p1`, `PMC…#s2.p3` for a
+paragraph, `PMC…#F2` for a figure caption. Each passage is stored with a
+`url` of `https://europepmc.org/article/PMC/<pmcid>#<fragment>`, and
+`search_library` returns the anchor, the URL and the passage text with every hit.
+
+### Tests
+
+The default `pytest` run is offline and uses SQLite. `CO_SCI_ATLAS_TESTS=1 pytest`
+also runs the same repo contract tests against Atlas (plus the Atlas-only
+library, vector and transaction tests), using collections under a unique test
+prefix that are dropped afterwards. Without that variable the Atlas tests are skipped.
 
 ## Quickstart
 
@@ -101,7 +183,7 @@ The agent roster and control flow follow the paper:
 | **Meta-review** | Synthesises system-wide feedback and writes the final research overview. |
 
 A **Supervisor** parses the goal into a research plan and schedules agent tasks
-through a durable SQLite-backed queue with bounded concurrency. It stops on
+through a durable queue (SQLite, or Atlas with atomic `find_one_and_update` claims) with bounded concurrency. It stops on
 whichever comes first: budget, wall clock, Elo stability, or an idle queue.
 
 See [Architecture](#architecture) for the full picture, including the shared
@@ -196,7 +278,8 @@ The prompts as this repo uses them, with Jinja interpolation, are in
 ## Install
 
 ```bash
-# Recommended: Python 3.11–3.13 (FAISS wheel availability)
+# Recommended: Python 3.11–3.13 (FAISS wheel availability).
+# pymongo (for the Atlas backend) is a core dependency, nothing extra to install.
 python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
@@ -483,7 +566,9 @@ run, dedup is just weaker. Falling back from Voyage to OpenAI uses
 `text-embedding-3-large` shortened to the configured `dim`, so vector width
 never changes underneath an existing index. Changing `dim` yourself does
 invalidate the FAISS indices under `data/vectors/`; the store detects the
-mismatch and rebuilds rather than corrupting them.
+mismatch and rebuilds rather than corrupting them. FAISS is what the SQLite
+backend uses; with `[storage] backend = "atlas"` hypothesis vectors live in
+Atlas Vector Search instead (see [Built on MongoDB Atlas](#built-on-mongodb-atlas)).
 
 ## Configuration
 
@@ -643,16 +728,19 @@ co_scientist/
                 # tool loop, token budgets, model routing, retry, batch, estimator
   mcp/          # MCP servers: per-call capture for the CLI backends, plus the
                 # outward-facing session server the Agent Plugin launches
-  storage/      # SQLite schema + migrations, db connection, 10 repos
+  storage/      # SQLite schema + migrations, db connection, 10 repos;
+                # atlas/ = the MongoDB Atlas implementation of the same repos
   tools/        # tool registry; web_fetch, web_search, pubmed/arxiv/europe_pmc,
                 # science-skills bridge
-  vectors/      # embeddings (OpenAI text-embedding-3-large / hash) + FAISS
+  vectors/      # embeddings (Voyage / OpenAI text-embedding-3-large / hash),
+                # FAISS (SQLite) or Atlas Vector Search (Atlas)
+  library/      # Europe PMC JATS ingest + hybrid search (Atlas only)
   orchestrator/ # task scheduling, Elo updates, termination, event bus
   safety/       # injection quoting, classifier, citation verifier
   obs/          # metrics (tokens, cost, cache hit ratio, latency)
   web/          # FastAPI + htmx + SSE UI + sanitized markdown renderer
   evals/        # per-agent + e2e + regression evals
-  tests/        # 418 unit tests (all offline) + fixtures + smoke
+  tests/        # ~550 offline tests (Atlas tests gated by CO_SCI_ATLAS_TESTS=1) + fixtures + smoke
 config/
   default.toml
   prompts/      # 14 Jinja2 templates (one per agent.mode), derived from

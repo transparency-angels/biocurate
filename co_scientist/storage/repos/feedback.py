@@ -1,82 +1,13 @@
-"""System / human feedback repository."""
+"""Backend-dispatching `feedback` repository."""
 
 from __future__ import annotations
 
-from datetime import datetime
+from ..atlas import feedback as _atlas
+from ..sqlite import feedback as _sql
+from ._dispatch import dual
 
-import aiosqlite
-
-from ...models import SystemFeedback
-
-
-async def insert(conn: aiosqlite.Connection, f: SystemFeedback) -> None:
-    await conn.execute(
-        """INSERT INTO system_feedback(
-               id, session_id, created_at, source, kind, target_id, text,
-               artifact_path, active)
-           VALUES (?,?,?,?,?,?,?,?,?)""",
-        (
-            f.id, f.session_id, f.created_at.isoformat(),
-            f.source, f.kind, f.target_id, f.text,
-            f.artifact_path, 1 if f.active else 0,
-        ),
-    )
-    await conn.commit()
-
-
-async def active_for_session(
-    conn: aiosqlite.Connection, session_id: str, target_id: str | None = None
-) -> list[SystemFeedback]:
-    """Return active feedback. If `target_id` is given, include targeted matches *plus* global."""
-    if target_id:
-        async with conn.execute(
-            """SELECT * FROM system_feedback
-                  WHERE session_id=? AND active=1
-                    AND (target_id IS NULL OR target_id=?)
-                  ORDER BY created_at DESC""",
-            (session_id, target_id),
-        ) as cur:
-            rows = await cur.fetchall()
-    else:
-        async with conn.execute(
-            """SELECT * FROM system_feedback
-                  WHERE session_id=? AND active=1 AND target_id IS NULL
-                  ORDER BY created_at DESC""",
-            (session_id,),
-        ) as cur:
-            rows = await cur.fetchall()
-    return [_row_to_fb(r) for r in rows]
-
-
-async def latest_system_feedback(
-    conn: aiosqlite.Connection, session_id: str
-) -> SystemFeedback | None:
-    async with conn.execute(
-        """SELECT * FROM system_feedback
-              WHERE session_id=? AND kind='system_feedback' AND source='meta_review'
-              ORDER BY created_at DESC LIMIT 1""",
-        (session_id,),
-    ) as cur:
-        row = await cur.fetchone()
-    return _row_to_fb(row) if row else None
-
-
-async def deactivate(conn: aiosqlite.Connection, feedback_id: str) -> None:
-    await conn.execute(
-        "UPDATE system_feedback SET active=0 WHERE id=?", (feedback_id,)
-    )
-    await conn.commit()
-
-
-def _row_to_fb(row: aiosqlite.Row) -> SystemFeedback:
-    return SystemFeedback(
-        id=row["id"],
-        session_id=row["session_id"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-        source=row["source"],
-        kind=row["kind"],
-        target_id=row["target_id"],
-        text=row["text"],
-        artifact_path=row["artifact_path"],
-        active=bool(row["active"]),
-    )
+insert = dual(_sql.insert, _atlas.insert)
+active_for_session = dual(_sql.active_for_session, _atlas.active_for_session)
+latest_system_feedback = dual(_sql.latest_system_feedback, _atlas.latest_system_feedback)
+deactivate = dual(_sql.deactivate, _atlas.deactivate)
+count_meta_review = dual(_sql.count_meta_review, _atlas.count_meta_review)
