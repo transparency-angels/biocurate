@@ -437,3 +437,50 @@ def test_factory_atlas_branch_returns_atlas_store() -> None:
     conn = AtlasConn(client=None, db=None, prefix="t_")
     s = make_vector_store(Config(), conn, "s1", 8)
     assert isinstance(s, AtlasVectorStore)
+
+
+def _persisted(coll: _FakeVecColl) -> list[dict]:
+    """What the fake collection would now hold, rebuilt from the upserts."""
+    docs: dict[str, dict] = {}
+    for flt, upd, _ in coll.upserts:
+        doc = docs.setdefault(flt["_id"], {"_id": flt["_id"], **upd.get("$setOnInsert", {})})
+        doc.update(upd["$set"])
+    return list(docs.values())
+
+
+async def test_atlas_store_add_stamps_updated_at_on_every_write() -> None:
+    coll = _FakeVecColl()
+    s = await _store(coll)
+    await s.add("a", _unit(4, 1))
+    assert "updated_at" in coll.upserts[0][1]["$set"]
+    assert "updated_at" not in coll.upserts[0][1].get("$setOnInsert", {})
+
+
+async def test_atlas_store_lag_window_survives_a_fresh_instance(monkeypatch) -> None:
+    coll = _FakeVecColl()
+    a = await _store(coll)
+    await a.add("old1", _unit(4, 0, 1))
+    await a.add("fresh", _unit(4, 1))
+    b = await _store(_FakeVecColl(docs=_persisted(coll)))  # another worker
+    stale = [("old1", 0.0), ("zzz", 0.0)]  # full (k=2) but stale: no "fresh"
+
+    async def fake_hits(q, k):
+        return stale
+
+    monkeypatch.setattr(b, "_index_hits", fake_hits)
+    res = dict(await b.search(_unit(4, 1), 2))
+    assert res["fresh"] == pytest.approx(1.0)
+
+
+async def test_atlas_store_old_updated_at_is_not_recent(monkeypatch) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    old = datetime.now(UTC) - timedelta(seconds=AS.RECENT_WINDOW_S + 60)
+    docs = [{"_id": "a", "embedding": [1.0, 0, 0, 0], "updated_at": old}]
+    b = await _store(_FakeVecColl(docs=docs))
+
+    async def fake_hits(q, k):
+        return [("zzz", 0.1)]
+
+    monkeypatch.setattr(b, "_index_hits", fake_hits)
+    assert "a" not in dict(await b.search(_unit(4, 1), 1))

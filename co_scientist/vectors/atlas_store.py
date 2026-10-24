@@ -3,7 +3,9 @@
 The session's vectors are mirrored in memory (tens to hundreds of rows), so
 `similarity`, `cosine_matrix` and `ids` stay synchronous and exact. `search`
 asks `$vectorSearch` and merges exact dot products for vectors added in the
-last `RECENT_WINDOW_S` seconds, because the index lags writes. If the index is
+last `RECENT_WINDOW_S` seconds, because the index lags writes. Each vector doc
+carries `updated_at`; `load_or_create` seeds the window from it, so a store built
+by another worker still scores a peer's fresh write exactly. If the index is
 missing or still building, it falls back to an exact in-memory search.
 """
 
@@ -62,6 +64,7 @@ class AtlasVectorStore:
         docs.sort(key=lambda d: (_aware(d.get("created_at")), str(d["_id"])))
         self._ordered_ids, self._rows = [], []
         self._row_by_id, self._added_at = {}, {}
+        wall, mono = datetime.now(UTC), time.monotonic()
         for d in docs:
             vec = np.asarray(d["embedding"], dtype="float32")
             if vec.shape != (self.dim,):
@@ -69,6 +72,10 @@ class AtlasVectorStore:
             self._row_by_id[d["_id"]] = len(self._rows)
             self._ordered_ids.append(d["_id"])
             self._rows.append(vec)
+            # Another worker's write inside the index-lag window must stay visible.
+            age = (wall - _aware(d.get("updated_at"))).total_seconds()
+            if age <= RECENT_WINDOW_S:
+                self._added_at[d["_id"]] = mono - max(age, 0.0)
 
     async def add(self, hypothesis_id: str, vec: np.ndarray) -> int:
         v = np.asarray(vec, dtype="float32").reshape(-1)
@@ -76,6 +83,7 @@ class AtlasVectorStore:
             "session_id": self.session_id,
             "model": self.cfg.embeddings.model,
             "embedding": [float(x) for x in v],
+            "updated_at": datetime.now(UTC),  # every write, so peers can see the lag window
         }
         async with self._lock:
             await self.conn.coll(COLLECTION).update_one(

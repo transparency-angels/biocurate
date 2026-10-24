@@ -46,7 +46,9 @@ async def test_atlas_vector_search_sees_just_added_vector(atlas_conn, atlas_cfg)
     dim = atlas_cfg.embeddings.dim
     s = await _store(atlas_conn, atlas_cfg, "sA")
     await s.add("fresh", _unit(dim, 1, 1))
-    res = await s.search(_unit(dim, 1, 1), 3)
+    # The real scenario is another worker: a fresh instance, seeded from `updated_at`.
+    other = await _store(atlas_conn, atlas_cfg, "sA")
+    res = await other.search(_unit(dim, 1, 1), 3)
     assert res[0][0] == "fresh"
     assert res[0][1] == pytest.approx(1.0, abs=1e-3)
 
