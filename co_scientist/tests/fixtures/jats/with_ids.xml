@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<article xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:mml="http://www.w3.org/1998/Math/MathML" article-type="research-article">
+  <front>
+    <journal-meta>
+      <journal-id journal-id-type="nlm-ta">Nat Test</journal-id>
+      <journal-title-group>
+        <journal-title>Nature Testing</journal-title>
+      </journal-title-group>
+    </journal-meta>
+    <article-meta>
+      <article-id pub-id-type="pmid">12345678</article-id>
+      <article-id pub-id-type="pmcid">PMC1234567</article-id>
+      <article-id pub-id-type="doi">10.1000/test.2021.001</article-id>
+      <title-group>
+        <article-title>Kinase <italic>XYZ</italic> drives resistance in tumour cells</article-title>
+      </title-group>
+      <pub-date pub-type="collection"><year>2022</year></pub-date>
+      <pub-date pub-type="epub"><day>3</day><month>5</month><year>2021</year></pub-date>
+      <abstract>
+        <p>We show that kinase XYZ drives drug resistance <xref ref-type="bibr" rid="B1">1</xref>.</p>
+      </abstract>
+    </article-meta>
+  </front>
+  <body>
+    <sec id="S1">
+      <title>Introduction</title>
+      <p id="P1">Resistance to therapy is common <xref ref-type="bibr" rid="B1">1</xref>, <xref ref-type="bibr" rid="B2">2</xref>. The <italic>XYZ</italic> gene
+        is frequently amplified.</p>
+    </sec>
+    <sec id="S2">
+      <title>Results</title>
+      <p id="P2">XYZ knockdown restored sensitivity (<xref ref-type="fig" rid="F1">Figure 1</xref>).</p>
+      <p id="P3">Expression levels were measured in six cell lines. Knockdown reduced viability in all of them. Rescue experiments confirmed specificity of the effect. Western blots showed complete loss of the protein after siRNA treatment. Dose response curves shifted leftwards by roughly an order of magnitude. Together these data support a causal role.</p>
+      <fig id="F1">
+        <label>Figure 1</label>
+        <caption>
+          <title>XYZ knockdown restores sensitivity.</title>
+          <p>Viability after drug exposure, mean of three replicates.</p>
+        </caption>
+        <graphic xlink:href="fig1.jpg"/>
+      </fig>
+      <table-wrap id="T1">
+        <label>Table 1</label>
+        <caption><title>Cell lines used.</title></caption>
+        <table frame="hsides"><thead><tr><th>Line</th><th>Origin</th></tr></thead><tbody><tr><td>A549</td><td>Lung</td></tr></tbody></table>
+        <table-wrap-foot><fn><p>Origin as reported by the supplier.</p></fn></table-wrap-foot>
+      </table-wrap>
+    </sec>
+  </body>
+  <back>
+    <ack><p>We thank the core facility.</p></ack>
+    <ref-list>
+      <title>References</title>
+      <ref id="B1"><mixed-citation>Smith J. Resistance in cancer. Nat Rev. 2019.</mixed-citation></ref>
+      <ref id="B2"><mixed-citation>Doe A. Kinase amplification. Cell. 2018.</mixed-citation></ref>
+    </ref-list>
+    <fn-group><fn><p>Footnote that must be skipped.</p></fn></fn-group>
+  </back>
+</article>
