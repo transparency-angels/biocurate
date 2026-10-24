@@ -36,18 +36,6 @@ Use markdown formatting. Cite hypothesis IDs as `[H-...]` inline.
 
 Citations: cite sources with their source tag and line number(s) as `[S#, L#-L#]` (or `[S#, L#]`) inline, e.g. `[S1, L3-L5]` or `[S2, L12]`, referencing the line numbers (`[L#]`) from the consulted source excerpts/documents.
 
-# Sources section formatting:
-Close with a `# Sources` section listing each `[S#]` tag you used with its full URL. Under each `- [S#] <URL>` line, provide 2-3 indented sub-bullets (using `  - `) that concisely summarize the key findings, mechanisms, or evidence from the excerpt:
-```markdown
-# Sources
-
-- [S1] https://...
-  - <Key factual finding or biological observation from excerpt>
-  - <Receptor, signaling axis, or molecular pathway identified>
-  - <Functional outcome or physiological consequence observed>
-- [S2] https://...
-  - <Key finding from excerpt>
-  - <Mechanistic consequence from excerpt>
-```
+Do not include a trailing `# Sources` section in this overview markdown document — literature sources, URLs, and excerpt logs are automatically extracted, structured, and presented via a separate dedicated sources view. Conclude your overview with `# Caveats and limitations`.
 
 **Use only URLs from the source list above — never invent one, and never cite a URL that is not listed.** If the list is empty, say so plainly and mark literature claims as requiring the scientist's verification.
