@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<article xmlns:xlink="http://www.w3.org/1999/xlink">
+  <front>
+    <article-meta>
+      <article-id pub-id-type="pmcid">PMC555</article-id>
+      <title-group><article-title>Messy structure</article-title></title-group>
+      <pub-date pub-type="epub"><year>2019</year></pub-date>
+    </article-meta>
+  </front>
+  <body>
+    <sec>
+      <title>Methods</title>
+      <p>Plain method paragraph.</p>
+      <table-wrap>
+        <caption><title>Reagents used.</title></caption>
+        <table><tbody><tr><td>a</td></tr></tbody></table>
+      </table-wrap>
+      <fig><graphic xlink:href="bare.jpg"/></fig>
+      <fig-group>
+        <fig id="G1"><label>Figure G1</label><caption><title>First grouped.</title></caption></fig>
+        <fig id="G2"><label>Figure G2</label><caption><title>Second grouped.</title></caption></fig>
+      </fig-group>
+      <boxed-text><p>Boxed paragraph text.</p></boxed-text>
+      <list list-type="bullet">
+        <list-item><p>List item one.</p></list-item>
+        <list-item><p>List item two.</p></list-item>
+      </list>
+      <p>Text before <fig id="F9"><label>Figure 9</label><caption><title>Inline caption words.</title></caption></fig> text after.</p>
+    </sec>
+  </body>
+</article>

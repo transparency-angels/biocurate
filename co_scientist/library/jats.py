@@ -14,6 +14,21 @@ from typing import Literal
 _WS = re.compile(r"\s+")
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 _PREFERRED_DATES = ("epub", "ppub")
+_FLOATS = ("fig", "table-wrap")
+_WRAPPERS = (
+    "fig-group",
+    "boxed-text",
+    "list",
+    "list-item",
+    "disp-quote",
+    "statement",
+    "def-list",
+    "def-item",
+    "def",
+    "glossary",
+    "gloss-group",
+    "term-head",
+)
 
 
 @dataclass(frozen=True)
@@ -45,6 +60,16 @@ def _text(el: ET.Element | None) -> str:
     if el is None:
         return ""
     return _clean("".join(el.itertext()))
+
+
+def _text_without(el: ET.Element, skip: tuple[str, ...]) -> str:
+    """Text of ``el`` excluding descendants tagged in ``skip`` (their tails are kept)."""
+    out = [el.text or ""]
+    for child in el:
+        if child.tag not in skip:
+            out.append(_text_without(child, skip))
+        out.append(child.tail or "")
+    return "".join(out)
 
 
 def _strip_namespaces(root: ET.Element) -> None:
@@ -118,7 +143,7 @@ class _Collector:
         self.max_chars = max_chars
         self.passages: list[Passage] = []
         self.top_count = 0
-        self.counters: dict[int, list[int]] = {0: [0]}
+        self.counters: dict[int, dict[str, int]] = {}
 
     def add(
         self,
@@ -156,8 +181,20 @@ class _Collector:
             parts.extend(_text(fn) for fn in el.findall("./table-wrap-foot//fn"))
         return _join(*parts)
 
-    def walk(self, el: ET.Element, path: list[str], top: int, counter: list[int]) -> None:
-        """Visit children of ``el`` in document order (body or a ``sec``)."""
+    def emit_float(self, el: ET.Element, path: list[str], top: int) -> None:
+        is_table = el.tag == "table-wrap"
+        label = _text(el.find("label")) or None
+        text = self.float_text(el, label or "", footnotes=is_table)
+        kind: Literal["figure", "table"] = "table" if is_table else "figure"
+        text = text or ("Table" if is_table else "Figure")
+        counts = self.counters.setdefault(top, {"p": 0, "f": 0, "t": 0})
+        key = "t" if is_table else "f"
+        counts[key] += 1
+        anchor = el.get("id") or f"s{top}.{key}{counts[key]}"
+        self.add(anchor, kind, " > ".join(path), label, text)
+
+    def walk(self, el: ET.Element, path: list[str], top: int) -> None:
+        """Visit children of ``el`` in document order (body, a ``sec`` or a wrapper)."""
         for child in el:
             tag = child.tag
             if tag == "sec":
@@ -167,29 +204,32 @@ class _Collector:
                 else:
                     self.walk_sec(child, path, top)
             elif tag == "p":
-                counter[0] += 1
-                anchor = child.get("id") or f"s{top}.p{counter[0]}"
-                self.add(anchor, "paragraph", " > ".join(path), None, _text(child))
-            elif tag in ("fig", "table-wrap") and child.get("id"):
-                label = _text(child.find("label")) or None
-                is_table = tag == "table-wrap"
-                text = self.float_text(child, label or "", footnotes=is_table)
-                kind: Literal["figure", "table"] = "table" if is_table else "figure"
-                self.add(child.get("id", ""), kind, " > ".join(path), label, text)
+                counts = self.counters.setdefault(top, {"p": 0, "f": 0, "t": 0})
+                counts["p"] += 1
+                anchor = child.get("id") or f"s{top}.p{counts['p']}"
+                text = _clean(_text_without(child, _FLOATS))
+                self.add(anchor, "paragraph", " > ".join(path), None, text)
+                for fl in child.iter():
+                    if fl.tag in _FLOATS:
+                        self.emit_float(fl, path, top)
+            elif tag in _FLOATS:
+                self.emit_float(child, path, top)
+            elif tag in _WRAPPERS:
+                self.walk(child, path, top)
 
     def walk_sec(self, sec: ET.Element, path: list[str], top: int) -> None:
         title = _text(sec.find("title"))
         new_path = [*path, title] if title else path
-        # Paragraph counter is per top-level section, shared with nested sections.
-        counter = self.counters.setdefault(top, [0])
-        self.walk(sec, new_path, top, counter)
+        self.walk(sec, new_path, top)
 
     def run_body(self, body: ET.Element) -> None:
-        self.walk(body, [], 0, self.counters[0])
+        self.walk(body, [], 0)
 
 
 def parse_jats(xml: str, pmcid: str, *, max_chars: int = 2000) -> tuple[PaperMeta, list[Passage]]:
     """Parse a JATS document into paper metadata and ordered, anchored passages."""
+    if max_chars < 1:
+        raise ValueError(f"max_chars must be >= 1, got {max_chars}")
     try:
         root = ET.fromstring(xml)
     except ET.ParseError as exc:

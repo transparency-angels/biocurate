@@ -84,3 +84,43 @@ def test_parse_jats_meta():
 def test_parse_jats_invalid_xml_raises_value_error():
     with pytest.raises(ValueError, match="JATS"):
         parse_jats("<article><oops>", "PMC1")
+
+
+def _messy() -> dict:
+    _, passages = parse_jats(_load("messy.xml"), "PMC555")
+    return {p.anchor_id: p for p in passages}
+
+
+def test_parse_jats_idless_floats_get_fallback_anchors():
+    by_anchor = _messy()
+    table = by_anchor["PMC555#s1.t1"]
+    assert table.kind == "table"
+    assert table.text == "Reagents used."
+    fig = by_anchor["PMC555#s1.f1"]
+    assert fig.kind == "figure"
+    assert fig.text == "Figure"
+
+
+def test_parse_jats_descends_into_wrappers():
+    by_anchor = _messy()
+    assert by_anchor["PMC555#G1"].kind == "figure"
+    assert by_anchor["PMC555#G2"].kind == "figure"
+    assert by_anchor["PMC555#s1.p2"].text == "Boxed paragraph text."
+    assert by_anchor["PMC555#s1.p3"].text == "List item one."
+    assert by_anchor["PMC555#s1.p4"].text == "List item two."
+
+
+def test_parse_jats_lifts_fig_out_of_paragraph():
+    _, passages = parse_jats(_load("messy.xml"), "PMC555")
+    para = next(p for p in passages if p.anchor_id == "PMC555#s1.p5")
+    fig = next(p for p in passages if p.anchor_id == "PMC555#F9")
+    assert fig.kind == "figure"
+    assert "Inline caption words" in fig.text
+    assert "Inline caption words" not in para.text
+    assert para.text.startswith("Text before") and para.text.endswith("text after.")
+    assert fig.ordinal == para.ordinal + 1
+
+
+def test_parse_jats_rejects_nonpositive_max_chars():
+    with pytest.raises(ValueError, match="max_chars"):
+        parse_jats(_load("with_ids.xml"), "PMC1234567", max_chars=0)
