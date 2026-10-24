@@ -50,7 +50,8 @@ co_scientist/storage/
 ├── sqlite/              reference implementation (the original repos, moved verbatim)
 │   └── <m>.py
 ├── atlas/               PyMongo async implementation
-│   ├── client.py        AtlasConn, connect_atlas, shutdown_clients
+│   ├── client.py        AtlasConn, connect_atlas, shutdown_clients (one client per URI,
+│   │                    replaced when the running event loop changes)
 │   ├── indexes.py       ensure_indexes, B-tree + search index definitions
 │   ├── _codec.py        aware datetimes, iso() helpers
 │   ├── library.py       evidence-library store (Atlas only, no SQLite twin)
@@ -88,6 +89,12 @@ index. It is idempotent: it never updates or drops an existing index.
 ---
 
 ## 3. What is stored where
+
+> **Search index definitions are never updated in place.** `ensure_indexes`
+> creates a missing index and leaves an existing one alone. Changing
+> `embeddings.dim`, `library.embedding` or an index name on a cluster that
+> already has the index requires dropping and recreating it. That is an owner
+> action; do not automate it.
 
 ### Core collections (one per former SQLite table)
 
@@ -220,12 +227,15 @@ boxed text and similar wrappers are walked.
   report = await ingest_query(conn, cfg, "TREM2 microglia", max_papers=10)
   ```
 - **What it does:** searches Europe PMC for open-access full-text papers, fetches the JATS XML (at most 4 at a time), parses it, and upserts each passage keyed by its anchor.
-- **Re-running is safe:** ingest replaces passages, never duplicates them.
+- **Re-running does not duplicate:** ingest upserts passages by anchor. See `failed` below for the partial-write caveat.
 - **`IngestReport` fields:**
   - `papers`, `passages`;
   - `skipped`: no full text or unparseable XML;
   - `already_present`;
-  - `failed`: `"pmcid: ErrorType: msg"`, for network or DB errors; safe to re-run.
+  - `failed`: `"pmcid: ErrorType: msg"`, for network or DB errors. Re-running retries
+    them, but a partial write can leave the paper marked present, so a retry may count
+    it as `already_present` and skip the missing passages. Check `library stats` after a
+    failure.
 - **Embeddings:** with `library.embedding = "auto"` (the default), Atlas Automated Embedding embeds the passages server-side, so the app sends none.
 - **Swappable storage:** ingest writes through the `LibraryStore` protocol (`has_paper`, `upsert_passages`), so another store can be dropped in.
 
@@ -270,7 +280,10 @@ Agents get a store from `make_vector_store(cfg, conn, session_id, dim)`
 
 How `AtlasVectorStore` works:
 - **`search`** runs `$vectorSearch` on `hyp_vec`, filtered by `session_id`. Scores are converted back to cosine (`2*score - 1`).
-- **Recent vectors:** it merges exact scores for vectors added in the last 30 s, to cover index lag.
+- **Recent vectors:** every `add` stamps `updated_at` (set on every write) on the vector doc, and
+  `load_or_create` seeds the 30 s lag window from it. A store built by another worker (the
+  dedup query and the commit each build their own) therefore still scores a peer's fresh write
+  exactly and merges it over a full but stale index result.
 - **Fallback:** it falls back to exact in-memory search when the index returns too few hits or errors. A missing index returns 0 hits without an error.
 - **`similarity` / `cosine_matrix` / `ids`** run in memory, for Ranking's pairing and Proximity's clustering.
 - **Dedup threshold:** `vectors.dedup_cosine_threshold = 0.92`. Measured with real Voyage: a near-duplicate scored 0.989 and an unrelated hypothesis 0.684.
@@ -362,6 +375,10 @@ than parsing artifacts in the UI.
 
 ## 9. Merge checklist
 
+- [ ] Git did not record `storage/repos/*.py -> storage/sqlite/*.py` as a rename. An edit made
+      to `storage/repos/<m>.py` on `main` will not follow the move: port it by hand into
+      `storage/sqlite/<m>.py`, add the Atlas twin in `storage/atlas/<m>.py`, and add a
+      `dual(...)` line in `storage/repos/<m>.py`. `test_repo_parity` fails if any of these is missed.
 - [ ] Rebase feature branches onto `feature/MongoDB`. It moved
       `storage/repos/*` into `storage/sqlite/*` and rewrote call sites in
       `cli.py`, `web/app.py`, `mcp/session_server.py`, `agents/supervisor.py`,
