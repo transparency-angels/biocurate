@@ -19,6 +19,9 @@ from co_scientist.models import (
     TournamentMatch,
 )
 from co_scientist.storage.repos import (
+    embeddings as emb_repo,
+)
+from co_scientist.storage.repos import (
     events as events_repo,
 )
 from co_scientist.storage.repos import (
@@ -34,6 +37,9 @@ from co_scientist.storage.repos import (
     sessions as sess_repo,
 )
 from co_scientist.storage.repos import (
+    spans as span_repo,
+)
+from co_scientist.storage.repos import (
     tasks as task_repo,
 )
 from co_scientist.storage.repos import (
@@ -45,7 +51,9 @@ from co_scientist.storage.repos import (
 
 
 def _now() -> datetime:
-    return datetime.now(UTC)
+    # Millisecond precision: BSON dates (Atlas) cannot hold microseconds.
+    t = datetime.now(UTC)
+    return t.replace(microsecond=t.microsecond // 1000 * 1000)
 
 
 async def _make_session(conn, sid: str = "ses_test") -> Session:
@@ -252,6 +260,12 @@ async def test_list_with_stats_counts_hypotheses(any_conn) -> None:
     assert rows[0]["n_hyps"] == 0 and rows[0]["top_elo"] is None
     assert {"status", "research_goal", "created_at", "updated_at"} <= set(one)
     assert len(await sess_repo.list_with_stats(any_conn, limit=1)) == 1
+    assert list(one) == [
+        "id", "status", "research_goal", "created_at", "updated_at",
+        "budget_usd", "budget_used_usd", "n_hyps", "top_elo",
+    ]
+    assert one["created_at"] == s1.created_at.isoformat()
+    assert one["updated_at"] == s1.updated_at.isoformat()
 
 
 @pytest.mark.asyncio
@@ -387,3 +401,228 @@ async def test_fetch_row_passes_malformed_json_through(conn) -> None:
     await conn.commit()
     row = await sess_repo.fetch_row(conn, s.id)
     assert row is not None and row["config_snapshot"] == "{oops"
+
+
+# --------------------------------------------------------------------------- #
+# Functions not covered above, so the Atlas twins are exercised too
+
+
+@pytest.mark.asyncio
+async def test_session_status_usage_and_overview(any_conn) -> None:
+    s = await _make_session(any_conn)
+    await sess_repo.set_status(any_conn, s.id, "paused")
+    got = await sess_repo.fetch(any_conn, s.id)
+    assert got is not None and got.status == "paused" and got.updated_at >= s.updated_at
+
+    await sess_repo.add_usage(any_conn, s.id, 100, 0.25)
+    await sess_repo.add_usage(any_conn, s.id, 50, 0.5)
+    got = await sess_repo.fetch(any_conn, s.id)
+    assert got is not None
+    assert got.budget_used_tokens == 150 and got.budget_used_usd == pytest.approx(0.75)
+
+    await sess_repo.set_final_overview(any_conn, s.id, "artifacts/x/overview.md")
+    got = await sess_repo.fetch(any_conn, s.id)
+    assert got is not None
+    assert got.status == "done" and got.final_overview == "artifacts/x/overview.md"
+    # untouched fields survive the partial updates
+    assert got.research_plan.objective == "x" and got.config_snapshot == {"k": 1}
+
+
+@pytest.mark.asyncio
+async def test_hypothesis_reads_and_simple_writes(any_conn) -> None:
+    s = await _make_session(any_conn)
+    await _seed_hyps(any_conn, s.id)  # elos: 1200, 1250, None
+    h0, h1, h2 = (f"hyp_{s.id}_{i}" for i in range(3))
+
+    many = await hyp_repo.fetch_many(any_conn, [h0, h2, "missing"])
+    assert {h.id for h in many} == {h0, h2}
+    assert await hyp_repo.fetch_many(any_conn, []) == []
+    assert await hyp_repo.fetch(any_conn, "missing") is None
+
+    # elo DESC, NULL last
+    assert [h.id for h in await hyp_repo.list_for_session(any_conn, s.id)] == [h1, h0, h2]
+    only = await hyp_repo.list_for_session(any_conn, s.id, state="pinned")
+    assert [h.id for h in only] == [h1]
+
+    # top_by_elo only considers in_tournament / pinned
+    assert [h.id for h in await hyp_repo.top_by_elo(any_conn, s.id, k=10)] == [h1, h0]
+    assert [h.id for h in await hyp_repo.top_by_elo(any_conn, s.id, k=1)] == [h1]
+
+    await hyp_repo.set_state(any_conn, h2, "rejected")
+    await hyp_repo.set_dedup_cluster(any_conn, h2, "clu")
+    got = await hyp_repo.fetch(any_conn, h2)
+    assert got is not None and got.state == "rejected" and got.dedup_cluster == "clu"
+    await hyp_repo.set_dedup_cluster(any_conn, h2, None)
+    got = await hyp_repo.fetch(any_conn, h2)
+    assert got is not None and got.dedup_cluster is None
+
+
+@pytest.mark.asyncio
+async def test_hypothesis_roundtrip_keeps_parents_and_defaults(any_conn) -> None:
+    s = await _make_session(any_conn)
+    h = _hyp(s.id, 0)
+    h = Hypothesis(**{**h.model_dump(), "parent_ids": ["p1", "p2"], "created_by": "evolution"})
+    await hyp_repo.insert(any_conn, h)
+    got = await hyp_repo.fetch(any_conn, h.id)
+    assert got == h
+
+
+@pytest.mark.asyncio
+async def test_set_state_if_same_state_counts_as_applied(any_conn) -> None:
+    s = await _make_session(any_conn)
+    h = _hyp(s.id, 0, state="draft")
+    await hyp_repo.insert(any_conn, h)
+    assert await hyp_repo.set_state_if(
+        any_conn, h.id, new_state="draft", expected_states=("draft",)
+    ) is True
+    assert await hyp_repo.set_state_if(
+        any_conn, "missing", new_state="draft", expected_states=("draft",)
+    ) is False
+
+
+@pytest.mark.asyncio
+async def test_review_reads(any_conn) -> None:
+    from datetime import timedelta
+
+    s = await _make_session(any_conn)
+    h = _hyp(s.id, 0)
+    await hyp_repo.insert(any_conn, h)
+    t0 = _now()
+    revs = []
+    for i in range(3):
+        r = Review(
+            id=f"rev{i}", hypothesis_id=h.id, session_id=s.id,
+            created_at=t0 + timedelta(seconds=i), kind="full", verdict=None,
+            scores=ReviewScores(novelty=0.1 * i), body="b", artifact_path="p",
+        )
+        revs.append(r)
+        assert await rev_repo.insert(any_conn, r) is True
+    got = await rev_repo.fetch(any_conn, "rev1")
+    assert got == revs[1]
+    assert await rev_repo.fetch(any_conn, "nope") is None
+    assert [r.id for r in await rev_repo.list_for_hypothesis(any_conn, h.id)] == [
+        "rev2", "rev1", "rev0",
+    ]
+    assert [r.id for r in await rev_repo.list_for_session(any_conn, s.id)] == [
+        "rev2", "rev1", "rev0",
+    ]
+    assert await rev_repo.list_for_hypothesis(any_conn, "other") == []
+
+
+@pytest.mark.asyncio
+async def test_feedback_latest_and_deactivate(any_conn) -> None:
+    from datetime import timedelta
+
+    s = await _make_session(any_conn)
+    t0 = _now()
+    for i, (src, kind) in enumerate(
+        [("meta_review", "system_feedback"), ("human", "system_feedback"),
+         ("meta_review", "system_feedback"), ("meta_review", "directive")]
+    ):
+        await fb_repo.insert(any_conn, SystemFeedback(
+            id=f"fb{i}", session_id=s.id, created_at=t0 + timedelta(seconds=i),
+            source=src, kind=kind, text=f"t{i}", artifact_path=None,
+        ))
+    latest = await fb_repo.latest_system_feedback(any_conn, s.id)
+    assert latest is not None and latest.id == "fb2"
+    assert await fb_repo.latest_system_feedback(any_conn, "empty") is None
+
+    await fb_repo.deactivate(any_conn, "fb3")
+    ids_ = [f.id for f in await fb_repo.active_for_session(any_conn, s.id)]
+    assert ids_ == ["fb2", "fb1", "fb0"]  # created_at DESC, fb3 inactive
+    got = await fb_repo.active_for_session(any_conn, s.id)
+    assert got[0].active is True and got[0].target_id is None
+
+
+@pytest.mark.asyncio
+async def test_usage_summary(any_conn) -> None:
+    from co_scientist.models import Transcript
+
+    s = await _make_session(any_conn)
+    empty = await tx_repo.usage_summary(any_conn, s.id)
+    assert empty == {
+        "input_tokens": 0, "output_tokens": 0, "cache_read": 0, "cache_write": 0,
+        "cost_usd": 0.0, "n_calls": 0,
+    }
+    t0 = _now()
+    for i in range(2):
+        await tx_repo.insert(any_conn, Transcript(
+            id=f"tx{i}", session_id=s.id, task_id=None, agent="a", action="x", model="m",
+            input_tokens=10, output_tokens=5, cache_read=2, cache_write=1, cost_usd=0.5,
+            started_at=t0, finished_at=t0, artifact_path="p",
+        ))
+    got = await tx_repo.usage_summary(any_conn, s.id)
+    assert got == {
+        "input_tokens": 20, "output_tokens": 10, "cache_read": 4, "cache_write": 2,
+        "cost_usd": 1.0, "n_calls": 2,
+    }
+    assert await tx_repo.durations_ms(any_conn, s.id) == [0, 0]
+
+
+@pytest.mark.asyncio
+async def test_events_recent(any_conn) -> None:
+    import asyncio
+
+    s = await _make_session(any_conn)
+    for i in range(3):
+        await events_repo.emit(
+            any_conn, session_id=s.id, task_id="t", agent="a", event=f"e{i}",
+            payload={"i": i} if i != 1 else None,
+        )
+        await asyncio.sleep(0.01)
+    await events_repo.emit(
+        any_conn, session_id="other", task_id=None, agent=None, event="x", payload={},
+    )
+    rows = await events_repo.recent(any_conn, s.id)
+    assert [r["event"] for r in rows] == ["e2", "e1", "e0"]
+    assert rows[0]["payload"] == {"i": 2} and rows[1]["payload"] is None
+    assert set(rows[0]) == {"ts", "session_id", "task_id", "agent", "event", "payload"}
+    assert isinstance(rows[0]["ts"], int) and rows[0]["ts"] >= rows[2]["ts"]
+    assert len(await events_repo.recent(any_conn, s.id, limit=2)) == 2
+    other = await events_repo.recent(any_conn, "other")
+    assert other[0]["payload"] is None and other[0]["task_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_spans_start_and_end(any_conn) -> None:
+    sid = await span_repo.start(
+        any_conn, trace_id="tr", parent_span_id=None, session_id="s", task_id=None,
+        name="n", attrs={"a": 1},
+    )
+    assert isinstance(sid, str) and sid
+    await span_repo.end(any_conn, sid, status="ok", attrs={"b": {"c": 2}, "a": 3})
+    sid2 = await span_repo.start(
+        any_conn, trace_id="tr", parent_span_id=sid, session_id="s", task_id=None, name="m",
+    )
+    await span_repo.end(any_conn, sid2, status="error")
+    await span_repo.end(any_conn, "missing")  # no-op, must not raise
+
+
+@pytest.mark.asyncio
+async def test_embeddings_meta(any_conn) -> None:
+    s = await _make_session(any_conn)
+    h = _hyp(s.id, 0)
+    await hyp_repo.insert(any_conn, h)
+    h1 = _hyp(s.id, 1)
+    await hyp_repo.insert(any_conn, h1)
+    kw = {"session_id": s.id, "model": "m", "dim": 8}
+    assert await emb_repo.has_embedding(any_conn, h.id, "m") is False
+    assert await emb_repo.fetch_offset(any_conn, h.id, "m") is None
+    await emb_repo.upsert(any_conn, id_="e1", hypothesis_id=h.id, faiss_offset=5,
+                          text_hash="x", **kw)
+    await emb_repo.upsert(any_conn, id_="e0", hypothesis_id=h1.id, faiss_offset=2,
+                          text_hash="y", **kw)
+    assert await emb_repo.has_embedding(any_conn, h.id, "m") is True
+    assert await emb_repo.has_embedding(any_conn, h.id, "other") is False
+    # re-upsert on the same (hypothesis, model): offset/hash replaced, id kept
+    await emb_repo.upsert(any_conn, id_="e9", hypothesis_id=h.id, faiss_offset=7,
+                          text_hash="z", **kw)
+    assert await emb_repo.fetch_offset(any_conn, h.id, "m") == 7
+    rows = await emb_repo.list_for_session(any_conn, s.id)
+    assert rows == [
+        {"id": "e0", "hypothesis_id": h1.id, "model": "m", "dim": 8,
+         "faiss_offset": 2, "text_hash": "y"},
+        {"id": "e1", "hypothesis_id": h.id, "model": "m", "dim": 8,
+         "faiss_offset": 7, "text_hash": "z"},
+    ]
+    assert await emb_repo.list_for_session(any_conn, "empty") == []

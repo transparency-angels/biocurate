@@ -1,10 +1,14 @@
-"""Atlas implementations for `spans` (stubs; filled in Tasks 4 and 5)."""
+"""Atlas implementations for `spans` (`_id` is the span id)."""
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
+from ...ids import span_id as new_span_id
 from .client import AtlasConn
+
+_COLL = "spans"
 
 
 async def start(
@@ -17,7 +21,22 @@ async def start(
     name: str,
     attrs: dict[str, Any] | None = None,
 ) -> str:
-    raise NotImplementedError("spans.start on Atlas: Task 4/5")
+    sid = new_span_id()
+    await conn.coll(_COLL).insert_one(
+        {
+            "_id": sid,
+            "trace_id": trace_id,
+            "parent_span_id": parent_span_id,
+            "session_id": session_id,
+            "task_id": task_id,
+            "name": name,
+            "started_at": int(time.time() * 1000),
+            "ended_at": None,
+            "attrs": attrs or {},
+            "status": "unset",
+        }
+    )
+    return sid
 
 
 async def end(
@@ -27,4 +46,11 @@ async def end(
     status: str = "ok",
     attrs: dict[str, Any] | None = None,
 ) -> None:
-    raise NotImplementedError("spans.end on Atlas: Task 4/5")
+    fields: dict[str, Any] = {"ended_at": int(time.time() * 1000), "status": status}
+    if attrs is None:
+        await conn.coll(_COLL).update_one({"_id": span_id_}, {"$set": fields})
+        return
+    # Server-side merge (new keys win). `$literal` stops `$`-prefixed strings in
+    # the values from being read as expressions.
+    fields["attrs"] = {"$mergeObjects": ["$attrs", {"$literal": attrs}]}
+    await conn.coll(_COLL).update_one({"_id": span_id_}, [{"$set": fields}])
