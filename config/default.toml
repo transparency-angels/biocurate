@@ -6,9 +6,9 @@
 
 [run]
 concurrency = 4
-max_ideas = 2
-max_matches_per_idea = 2
-wall_clock_seconds = 120            # 2h default
+max_ideas = 15
+max_matches_per_idea = 15
+wall_clock_seconds = 600            # 2h default
 budget_tokens = 5_000_000
 # Not a spend gate: a subscription has no marginal per-call price. The CLI
 # reports an equivalent API cost per call and this caps that gauge, which is
