@@ -99,6 +99,7 @@ class CoScientistMcpServer:
 
         self._seq = 0
         self._lock = asyncio.Lock()
+        self._atlas: Any = None  # AtlasConn, opened lazily on first research call
 
     # ----------------------------- tool list ----------------------------- #
 
@@ -148,11 +149,27 @@ class CoScientistMcpServer:
         _write_json(path, {"tool": name, "seq": seq, "input": args})
         return text_result(_RECORD_ACK)
 
+    async def _research_db(self) -> Any:
+        """Atlas connection for read-only tools (search_library); None on SQLite."""
+        if self.cfg.storage.backend != "atlas":
+            return None  # this process never writes SQLite
+        if self._atlas is None:
+            from ..storage.atlas.client import connect_atlas
+
+            self._atlas = await connect_atlas(self.cfg)
+        return self._atlas
+
     async def _handle_research(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         tool = self.research_tools[name]
+        try:
+            db = await self._research_db()
+        except Exception as e:
+            err = {"error": f"tool {name!r} failed: could not open Atlas ({type(e).__name__})"}
+            await self._log_tool_call(name, args, err, is_error=True, t0=time.monotonic())
+            return text_result(err, is_error=True)
         ctx = ToolCtx(
             cfg=self.cfg,
-            db=None,                 # this process never writes SQLite
+            db=db,
             session_id=self.session_id or None,
             task_id=self.task_id,
             run_id=tool_run_id(),

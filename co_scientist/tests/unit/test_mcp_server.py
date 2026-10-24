@@ -276,3 +276,47 @@ def test_extract_urls_walks_nested_tool_results() -> None:
     assert set(extract_urls(body)) == {
         "https://a.example", "https://b.example", "https://c.example",
     }
+
+
+# --------------------------------------------------------------------------- #
+# search_library in the MCP process gets an Atlas connection
+
+
+@pytest.fixture
+def atlas_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CoScientistMcpServer:
+    from co_scientist.config import Config, StorageCfg
+
+    cfg = Config(storage=StorageCfg(backend="atlas"))
+    monkeypatch.setattr("co_scientist.mcp.server.load_config", lambda *a, **k: cfg)
+    monkeypatch.setenv("COSCI_CAPTURE_DIR", str(tmp_path / "cap"))
+    monkeypatch.setenv("COSCI_RECORD_TOOLS", "record_hypothesis")
+    monkeypatch.setenv("COSCI_AGENT", "generation")
+    return CoScientistMcpServer()
+
+
+async def test_mcp_research_search_library_gets_atlas_conn(
+    atlas_server: CoScientistMcpServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sentinel = object()
+    opened: list[object] = []
+    seen: list[object] = []
+
+    async def fake_connect(cfg: Any) -> object:
+        opened.append(cfg)
+        return sentinel
+
+    async def fake_call(args: dict[str, Any], ctx: Any) -> ToolResult:
+        seen.append(ctx.db)
+        return ToolResult(content={"n": 0, "hits": []}, duration_ms=1)
+
+    monkeypatch.setattr("co_scientist.storage.atlas.client.connect_atlas", fake_connect)
+    monkeypatch.setattr(atlas_server.research_tools["search_library"], "call", fake_call)
+    for _ in range(2):
+        res = await atlas_server.handle("search_library", {"query": "TREM2"})
+        assert res["isError"] is False
+    assert seen == [sentinel, sentinel]
+    assert len(opened) == 1  # cached after first use
+
+
+async def test_mcp_research_db_is_none_on_sqlite(server: CoScientistMcpServer) -> None:
+    assert await server._research_db() is None

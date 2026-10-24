@@ -181,6 +181,7 @@ class EvolutionAgent(BaseAgent):
             result = await run_tool_loop(
                 self.deps.llm, spec=spec, ctx=ctx,
                 registry=self.deps.tools,
+                db=self.deps.db,
                 max_iters=self.deps.cfg.tool_loop.evolution_max_iters,
                 parallel_cap=self.deps.cfg.tool_loop.parallel_cap,
                 tool_timeout_s=self.deps.cfg.tool_loop.tool_timeout_seconds,
