@@ -24,7 +24,7 @@ from ..logging import get_logger
 from ..models import SystemFeedback, Task, TaskResult
 from ..models.hypothesis import CitedPaper
 from ..models.review import Evidence
-from ..storage.artifacts import write_json, write_text
+from ..storage.artifacts import session_root, write_json, write_text
 from ..storage.repos import feedback as fb_repo
 from ..storage.repos import hypotheses as hyp_repo
 from ..storage.repos import reviews as rev_repo
@@ -232,16 +232,8 @@ class MetaReviewAgent(BaseAgent):
         return None
 
     @staticmethod
-    def _source_block(hypotheses: list, reviews: list, *, limit: int = 40) -> str:
-        """The literature the session actually saw, deduped by URL.
-
-        Meta-review runs without tools, so unless we hand it the sources
-        gathered downstream it has nothing to cite — and correctly refuses to
-        invent any, producing an overview with no references at all. Both
-        `Hypothesis.citations` and `Review.evidence` carry verified URLs
-        (verified in the sense that Generation/Reflection could only record a
-        URL that appeared in one of their own tool results).
-        """
+    def _collect_sources(hypotheses: list, reviews: list) -> dict[str, dict[str, Any]]:
+        """Extract and deduplicate sources across hypotheses and reviews by URL."""
         seen: dict[str, dict[str, Any]] = {}
 
         for h in hypotheses:
@@ -251,18 +243,30 @@ class MetaReviewAgent(BaseAgent):
                     continue
                 excerpt = getattr(c, "excerpt", "") or ""
                 lr = getattr(c, "line_range", None) or MetaReviewAgent._extract_line_range(excerpt)
+                doi = getattr(c, "doi", None)
+                year = getattr(c, "year", None)
                 if url not in seen:
                     seen[url] = {
                         "title": getattr(c, "title", "") or "(untitled)",
+                        "url": url,
+                        "doi": doi,
+                        "year": year,
                         "excerpt": excerpt,
+                        "excerpts": [excerpt] if excerpt else [],
                         "line_range": lr,
                         "refs": [],
                     }
                 else:
+                    if excerpt and excerpt not in seen[url]["excerpts"]:
+                        seen[url]["excerpts"].append(excerpt)
                     if not seen[url]["excerpt"] and excerpt:
                         seen[url]["excerpt"] = excerpt
                     if not seen[url]["line_range"] and lr:
                         seen[url]["line_range"] = lr
+                    if not seen[url].get("doi") and doi:
+                        seen[url]["doi"] = doi
+                    if not seen[url].get("year") and year:
+                        seen[url]["year"] = year
                 seen[url]["refs"].append(h.id)
 
         for r in reviews:
@@ -275,34 +279,173 @@ class MetaReviewAgent(BaseAgent):
                 if url not in seen:
                     seen[url] = {
                         "title": getattr(ev, "claim", "") or "(claim)",
+                        "url": url,
+                        "doi": None,
+                        "year": None,
                         "excerpt": excerpt,
+                        "excerpts": [excerpt] if excerpt else [],
                         "line_range": lr,
                         "refs": [],
                     }
                 else:
+                    if excerpt and excerpt not in seen[url]["excerpts"]:
+                        seen[url]["excerpts"].append(excerpt)
                     if not seen[url]["excerpt"] and excerpt:
                         seen[url]["excerpt"] = excerpt
                     if not seen[url]["line_range"] and lr:
                         seen[url]["line_range"] = lr
                 seen[url]["refs"].append(r.hypothesis_id)
 
+        return seen
+
+    @classmethod
+    def _source_block(cls, hypotheses: list, reviews: list, *, limit: int = 40) -> str:
+        """The literature the session actually saw, deduped by URL.
+
+        Meta-review runs without tools, so unless we hand it the sources
+        gathered downstream it has nothing to cite — and correctly refuses to
+        invent any, producing an overview with no references at all. Both
+        `Hypothesis.citations` and `Review.evidence` carry verified URLs
+        (verified in the sense that Generation/Reflection could only record a
+        URL that appeared in one of their own tool results).
+        """
+        seen = cls._collect_sources(hypotheses, reviews)
         if not seen:
             return ""
 
         lines: list[str] = []
         for i, (url, meta) in enumerate(list(seen.items())[:limit], start=1):
             refs = ", ".join(dict.fromkeys(meta["refs"]))[:120]
-            line_range = meta.get("line_range") or MetaReviewAgent._extract_line_range(meta["excerpt"])
+            line_range = meta.get("line_range") or cls._extract_line_range(meta["excerpt"])
             line_info = f" (lines: {line_range})" if line_range else ""
             line = f"- [S{i}] {meta['title'][:200]}{line_info}\n  {url}"
             if meta["excerpt"]:
-                line += f'\n  > "{meta["excerpt"][:300]}"'
+                line += f'\n  > "{meta["excerpt"][:1000]}"'
             if refs:
                 line += f"\n  (supports: {refs})"
             lines.append(line)
         if len(seen) > limit:
             lines.append(f"- …and {len(seen) - limit} more sources not shown.")
         return "\n".join(lines)
+
+    @classmethod
+    def _excerpt_to_bullets(cls, excerpt: str, max_bullets: int = 3) -> list[str]:
+        """Convert raw excerpt text into 2-3 concise summary bullet sentences."""
+        if not excerpt:
+            return []
+        cleaned = re.sub(r"\[(?:s\d+,\s*)?l\d+(?:\s*-\s*l?\d+)?\]\s*", "", excerpt, flags=re.IGNORECASE)
+        cleaned = " ".join(cleaned.split())
+        sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", cleaned) if s.strip()]
+        bullets: list[str] = []
+        for s in sentences:
+            if len(s) >= 10:
+                if not s.endswith((".", "!", "?")):
+                    s += "."
+                bullets.append(s)
+            if len(bullets) >= max_bullets:
+                break
+        if not bullets and cleaned:
+            summary = cleaned[:200]
+            if not summary.endswith((".", "!", "?")):
+                summary += "."
+            bullets.append(summary)
+        return bullets
+
+    @classmethod
+    def _enrich_sources_section(cls, text: str, seen: dict[str, dict[str, Any]]) -> str:
+        """Ensure each - [S#] entry in the # Sources section has 2-3 indented sub-bullets."""
+        if not seen:
+            return text
+
+        sources_match = re.search(r"(^|\n)(#+\s*Sources\b[^\n]*\n)(.*)$", text, re.IGNORECASE | re.DOTALL)
+        if not sources_match:
+            return text
+
+        prefix = text[:sources_match.start(2)]
+        header = sources_match.group(2)
+        sources_body = sources_match.group(3)
+
+        source_by_idx: dict[int, dict[str, Any]] = {
+            i: meta for i, (url, meta) in enumerate(seen.items(), start=1)
+        }
+
+        lines = sources_body.splitlines()
+        out_lines: list[str] = []
+        i = 0
+        n = len(lines)
+        source_re = re.compile(r"^-\s*\[S(\d+)\]\s*(.*)$", re.IGNORECASE)
+
+        while i < n:
+            line = lines[i]
+            m = source_re.match(line)
+            if m:
+                s_idx = int(m.group(1))
+                out_lines.append(line)
+                i += 1
+                has_subbullets = False
+                while i < n and (lines[i].startswith("  ") or lines[i].startswith("\t")):
+                    out_lines.append(lines[i])
+                    if lines[i].lstrip().startswith(("-", "*")):
+                        has_subbullets = True
+                    i += 1
+
+                if not has_subbullets:
+                    meta = source_by_idx.get(s_idx)
+                    if meta:
+                        bullets = cls._excerpt_to_bullets(meta.get("excerpt", ""))
+                        for b in bullets:
+                            out_lines.append(f"  - {b}")
+            else:
+                out_lines.append(line)
+                i += 1
+
+        return prefix + header + "\n".join(out_lines)
+
+    @classmethod
+    def _format_sources_raw(cls, session_id: str, seen: dict[str, dict[str, Any]]) -> str:
+        """Format the raw excerpts log for all papers consulted in the session."""
+        now = datetime.now(UTC).isoformat()
+        header = [
+            "================================================================================",
+            "RAW SOURCES LOG",
+            f"Session:   {session_id}",
+            f"Generated: {now}",
+            "Format:    Source index, title, URL, line numbers, and verbatim excerpts.",
+            "================================================================================",
+            "",
+        ]
+        entries: list[str] = []
+        for i, (url, meta) in enumerate(seen.items(), start=1):
+            refs = ", ".join(dict.fromkeys(meta.get("refs") or [])) or "(none)"
+            line_range = meta.get("line_range") or cls._extract_line_range(meta.get("excerpt", "")) or "(unspecified)"
+            block = [
+                "--------------------------------------------------------------------------------",
+                f"SOURCE:     [S{i}]",
+                f"TITLE:      {meta.get('title', '(untitled)')}",
+                f"URL:        {url}",
+            ]
+            if meta.get("doi"):
+                block.append(f"DOI:        {meta['doi']}")
+            if meta.get("year"):
+                block.append(f"YEAR:       {meta['year']}")
+            block.extend([
+                f"LINE RANGE: {line_range}",
+                f"REFERENCES: {refs}",
+                "EXCERPTS:",
+            ])
+            excerpts = meta.get("excerpts") or ([meta["excerpt"]] if meta.get("excerpt") else [])
+            if not excerpts:
+                block.append("  (no excerpt recorded)")
+            else:
+                for idx, exc in enumerate(excerpts, start=1):
+                    if len(excerpts) > 1:
+                        block.append(f"  --- Excerpt {idx} ---")
+                    for eline in exc.strip().splitlines():
+                        block.append(f"  {eline}")
+            block.append("--------------------------------------------------------------------------------")
+            entries.append("\n".join(block))
+
+        return "\n".join(header) + "\n\n".join(entries) + "\n"
 
     # ----------------------------- final overview ----------------------------- #
 
@@ -346,6 +489,7 @@ class MetaReviewAgent(BaseAgent):
 
         all_reviews = [rv for group in reviews_by_hyp.values() for rv in group]
         hydrated_hyps, hydrated_reviews = await self._hydrate_sources(top, all_reviews)
+        seen_sources = self._collect_sources(hydrated_hyps, hydrated_reviews)
         sources = self._source_block(hydrated_hyps, hydrated_reviews)
 
         prompt = render(
@@ -381,6 +525,9 @@ class MetaReviewAgent(BaseAgent):
         if not text.strip():
             text = "# Research overview\n\n_(No content was generated; see transcripts.)_"
 
+        # Ensure # Sources section has indented sub-bullets summarizing the excerpts
+        text = self._enrich_sources_section(text, seen_sources)
+
         citations = self.extract_citations(text)
         log.info(
             "final_overview_citations",
@@ -391,10 +538,23 @@ class MetaReviewAgent(BaseAgent):
         overview_path = await write_text(
             self.deps.cfg, session.id, "final", "overview", ".md", text
         )
+
+        # Write sources.raw logging verbatim excerpts with line numbers
+        sources_raw_content = self._format_sources_raw(session.id, seen_sources)
+        sources_raw_path = await write_text(
+            self.deps.cfg, session.id, "final", "sources", ".raw", sources_raw_content
+        )
+        try:
+            root = session_root(self.deps.cfg, session.id)
+            (root / "sources.raw").write_text(sources_raw_content, encoding="utf-8")
+        except Exception as e:
+            log.warning("failed_writing_root_sources_raw", err=str(e))
+
         return TaskResult(
             kind="final_overview_generated",
             extra={
                 "overview_path": overview_path,
+                "sources_raw_path": sources_raw_path,
                 "n_top": len(top),
                 "citations": citations,
             },
