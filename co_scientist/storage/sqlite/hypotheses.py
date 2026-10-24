@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 
 import aiosqlite
 
-from ...models import Hypothesis
+from ...models import CitedPaper, Hypothesis
 
 
 def _now() -> str:
@@ -24,8 +24,9 @@ async def insert(conn: aiosqlite.Connection, h: Hypothesis) -> bool:
         """INSERT OR IGNORE INTO hypotheses(
                id, session_id, created_at, created_by, strategy, parent_ids,
                title, summary, full_text, artifact_path,
-               elo, matches_played, state, dedup_cluster)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               elo, matches_played, state, dedup_cluster,
+               citations, data_evidence)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             h.id,
             h.session_id,
@@ -41,6 +42,8 @@ async def insert(conn: aiosqlite.Connection, h: Hypothesis) -> bool:
             h.matches_played,
             h.state,
             h.dedup_cluster,
+            json.dumps([c.model_dump(mode="json") for c in h.citations]),
+            json.dumps(h.data_evidence) if h.data_evidence is not None else None,
         ),
     )
     inserted = cur.rowcount > 0
@@ -208,10 +211,11 @@ def _row_to_hyp(row: aiosqlite.Row) -> Hypothesis:
         title=row["title"],
         summary=row["summary"],
         full_text=row["full_text"],
-        citations=[],  # citations live in the JSON artifact, not the row
+        citations=[CitedPaper.model_validate(c) for c in json.loads(row["citations"] or "[]")],
         artifact_path=row["artifact_path"],
         elo=row["elo"],
         matches_played=row["matches_played"],
         state=row["state"],
         dedup_cluster=row["dedup_cluster"],
+        data_evidence=json.loads(row["data_evidence"]) if row["data_evidence"] else None,
     )

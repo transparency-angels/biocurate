@@ -6,7 +6,7 @@ from typing import Any
 
 from pymongo.errors import DuplicateKeyError
 
-from ...models import Review, ReviewScores
+from ...models import AssumptionCheck, Evidence, Review, ReviewScores
 from ._codec import aware
 from .client import AtlasConn
 
@@ -14,7 +14,6 @@ _COLL = "reviews"
 
 
 def _to_doc(r: Review) -> dict[str, Any]:
-    # Assumptions and evidence live in the JSON artifact, not the row (as in SQLite).
     return {
         "_id": r.id,
         "hypothesis_id": r.hypothesis_id,
@@ -25,6 +24,8 @@ def _to_doc(r: Review) -> dict[str, Any]:
         "scores": r.scores.model_dump(),
         "body": r.body,
         "artifact_path": r.artifact_path,
+        "evidence": [e.model_dump(mode="json") for e in r.evidence],
+        "assumptions": [a.model_dump(mode="json") for a in r.assumptions],
     }
 
 
@@ -37,8 +38,8 @@ def _from_doc(d: dict[str, Any]) -> Review:
         kind=d["kind"],
         verdict=d.get("verdict"),
         scores=ReviewScores(**(d.get("scores") or {})),
-        assumptions=[],
-        evidence=[],
+        assumptions=[AssumptionCheck.model_validate(a) for a in d.get("assumptions") or []],
+        evidence=[Evidence.model_validate(e) for e in d.get("evidence") or []],
         body=d["body"],
         artifact_path=d["artifact_path"],
     )

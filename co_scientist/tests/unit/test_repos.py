@@ -9,6 +9,9 @@ import pytest
 
 from co_scientist import ids
 from co_scientist.models import (
+    AssumptionCheck,
+    CitedPaper,
+    Evidence,
     Hypothesis,
     ResearchPlan,
     Review,
@@ -164,6 +167,86 @@ async def test_review_id_iteration_collision_blocked(any_conn) -> None:
     )
     assert await rev_repo.insert(any_conn, r) is True
     assert await rev_repo.insert(any_conn, r) is False   # idempotent
+
+
+@pytest.mark.asyncio
+async def test_hypothesis_roundtrip_keeps_citations_and_data_evidence(any_conn) -> None:
+    s = await _make_session(any_conn)
+    hid = ids.hypothesis_id(s.id, "generation/literature", "cit")
+    h = Hypothesis(
+        id=hid, session_id=s.id, created_at=_now(),
+        created_by="generation", strategy="literature",
+        title="t", summary="s", full_text="f",
+        citations=[
+            CitedPaper(title="P", url="http://x", excerpt="e", doi="10.1/x",
+                       year=2020, line_range="L3-L5"),
+            CitedPaper(title="Q", url="http://y"),
+        ],
+        data_evidence={"source": "tcga", "rows": [1, 2], "nested": {"p": 0.01}},
+        artifact_path=f"artifacts/{s.id}/hypotheses/{hid}.json", state="draft",
+    )
+    assert await hyp_repo.insert(any_conn, h) is True
+    got = await hyp_repo.fetch(any_conn, hid)
+    assert got is not None
+    assert got.citations == h.citations
+    assert got.citations[0].line_range == "L3-L5"
+    assert got.data_evidence == h.data_evidence
+    for listed in (
+        await hyp_repo.fetch_many(any_conn, [hid]),
+        await hyp_repo.list_for_session(any_conn, s.id),
+    ):
+        assert listed[0].citations == h.citations
+        assert listed[0].data_evidence == h.data_evidence
+
+
+@pytest.mark.asyncio
+async def test_review_roundtrip_keeps_evidence_and_assumptions(any_conn) -> None:
+    s = await _make_session(any_conn)
+    hid = ids.hypothesis_id(s.id, "generation/literature", "ev")
+    await hyp_repo.insert(any_conn, Hypothesis(
+        id=hid, session_id=s.id, created_at=_now(),
+        created_by="generation", strategy="literature",
+        title="t", summary="s", full_text="f",
+        artifact_path=f"artifacts/{s.id}/hypotheses/{hid}.json", state="draft",
+    ))
+    rid = ids.review_id(hid, "full", iteration=0)
+    r = Review(
+        id=rid, hypothesis_id=hid, session_id=s.id, created_at=_now(), kind="full",
+        evidence=[Evidence(claim="c", url="http://x", excerpt="e", line_range="L1-L2")],
+        assumptions=[AssumptionCheck(assumption="a", plausibility="uncertain", rationale="r")],
+        body="ok", artifact_path=f"artifacts/{s.id}/reviews/{rid}.json",
+    )
+    assert await rev_repo.insert(any_conn, r) is True
+    for got in (
+        await rev_repo.fetch(any_conn, rid),
+        (await rev_repo.list_for_hypothesis(any_conn, hid))[0],
+        (await rev_repo.list_for_session(any_conn, s.id))[0],
+    ):
+        assert got is not None
+        assert got.evidence == r.evidence and got.evidence[0].line_range == "L1-L2"
+        assert got.assumptions == r.assumptions
+
+
+@pytest.mark.asyncio
+async def test_old_rows_without_new_columns_read_as_empty(conn) -> None:
+    s = await _make_session(conn)
+    await conn.execute(
+        """INSERT INTO hypotheses(id, session_id, created_at, created_by, strategy,
+               title, summary, full_text, artifact_path, matches_played, state)
+           VALUES ('old_h', ?, ?, 'generation', 'literature', 't', 's', 'f', 'p', 0, 'draft')""",
+        (s.id, _now().isoformat()),
+    )
+    await conn.execute(
+        """INSERT INTO reviews(id, hypothesis_id, session_id, created_at, kind, body,
+               artifact_path)
+           VALUES ('old_r', 'old_h', ?, ?, 'full', 'b', 'p')""",
+        (s.id, _now().isoformat()),
+    )
+    await conn.commit()
+    h = await hyp_repo.fetch(conn, "old_h")
+    r = await rev_repo.fetch(conn, "old_r")
+    assert h is not None and h.citations == [] and h.data_evidence is None
+    assert r is not None and r.evidence == [] and r.assumptions == []
 
 
 @pytest.mark.asyncio

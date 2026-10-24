@@ -6,7 +6,7 @@ from typing import Any
 
 from pymongo.errors import DuplicateKeyError
 
-from ...models import Hypothesis
+from ...models import CitedPaper, Hypothesis
 from ._codec import aware
 from .client import AtlasConn
 
@@ -15,7 +15,6 @@ _POOL = ["in_tournament", "pinned"]
 
 
 def _to_doc(h: Hypothesis) -> dict[str, Any]:
-    # Citations live in the JSON artifact, not the row (as in SQLite).
     return {
         "_id": h.id,
         "session_id": h.session_id,
@@ -31,6 +30,8 @@ def _to_doc(h: Hypothesis) -> dict[str, Any]:
         "matches_played": h.matches_played,
         "state": h.state,
         "dedup_cluster": h.dedup_cluster,
+        "citations": [c.model_dump(mode="json") for c in h.citations],
+        "data_evidence": h.data_evidence,
     }
 
 
@@ -45,12 +46,13 @@ def _from_doc(d: dict[str, Any]) -> Hypothesis:
         title=d["title"],
         summary=d["summary"],
         full_text=d["full_text"],
-        citations=[],
+        citations=[CitedPaper.model_validate(c) for c in d.get("citations") or []],
         artifact_path=d["artifact_path"],
         elo=d.get("elo"),
         matches_played=d["matches_played"],
         state=d["state"],
         dedup_cluster=d.get("dedup_cluster"),
+        data_evidence=d.get("data_evidence"),
     )
 
 

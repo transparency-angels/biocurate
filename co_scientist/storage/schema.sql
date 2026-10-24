@@ -35,7 +35,9 @@ CREATE TABLE IF NOT EXISTS hypotheses (
     elo             REAL,
     matches_played  INTEGER NOT NULL DEFAULT 0,
     state           TEXT NOT NULL,                     -- draft|reviewed|in_tournament|pinned|rejected|quarantined|retired
-    dedup_cluster   TEXT
+    dedup_cluster   TEXT,
+    citations       TEXT,                              -- JSON array of CitedPaper
+    data_evidence   TEXT                               -- JSON object
 );
 CREATE INDEX IF NOT EXISTS hyp_sess_elo   ON hypotheses(session_id, elo DESC);
 CREATE INDEX IF NOT EXISTS hyp_sess_state ON hypotheses(session_id, state);
@@ -52,7 +54,9 @@ CREATE TABLE IF NOT EXISTS reviews (
     testability     REAL,
     feasibility     REAL,
     body            TEXT NOT NULL,
-    artifact_path   TEXT NOT NULL
+    artifact_path   TEXT NOT NULL,
+    evidence        TEXT,                              -- JSON array of Evidence
+    assumptions     TEXT                               -- JSON array of AssumptionCheck
 );
 CREATE INDEX IF NOT EXISTS rev_hyp ON reviews(hypothesis_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS rev_sess ON reviews(session_id, created_at DESC);
