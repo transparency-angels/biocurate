@@ -485,10 +485,18 @@ def report(
     if p is None:
         console.print(f"[red]No final overview yet for {session_id}[/red]")
         raise typer.Exit(1)
-    text = p.read_text(encoding="utf-8")
+    content = p.read_text(encoding="utf-8")
     if format == "json":
-        console.print_json(data={"session_id": session_id, "path": str(p), "content": text})
+        console.print_json(data={"session_id": session_id, "path": str(p), "content": content})
     else:
+        if p.suffix == ".json":
+            try:
+                data = json.loads(content)
+                text = data.get("overview", {}).get("markdown") or data.get("markdown") or content
+            except Exception:
+                text = content
+        else:
+            text = content
         console.print(text)
 
 

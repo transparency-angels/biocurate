@@ -200,7 +200,15 @@ def create_app(cfg: Config | None = None) -> FastAPI:
                 raise HTTPException(status_code=404, detail="overview unavailable") from e
             if not path.is_file():
                 raise HTTPException(status_code=404, detail="overview missing on disk")
-            overview_md = path.read_text(encoding="utf-8")
+            content = path.read_text(encoding="utf-8")
+            if path.suffix == ".json":
+                try:
+                    data = json.loads(content)
+                    overview_md = data.get("overview", {}).get("markdown") or data.get("markdown") or content
+                except Exception:
+                    overview_md = content
+            else:
+                overview_md = content
             return TEMPLATES.TemplateResponse(
                 request,
                 "overview.html",
@@ -239,6 +247,53 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             return JSONResponse(s.model_dump(mode="json"))
         finally:
             await conn.close()
+
+    @app.get("/api/sessions/{session_id}/overview")
+    async def api_overview(session_id: str) -> JSONResponse:
+        root = (cfg.data_dir / "artifacts" / session_id).resolve()
+        for candidate in [root / "final" / "synthesis.json", root / "synthesis.json"]:
+            if candidate.is_file():
+                try:
+                    data = json.loads(candidate.read_text(encoding="utf-8"))
+                    return JSONResponse(data.get("overview", data))
+                except Exception as e:
+                    raise HTTPException(status_code=500, detail=str(e))
+        for candidate in [root / "final" / "overview.json", root / "overview.json"]:
+            if candidate.is_file():
+                try:
+                    return JSONResponse(json.loads(candidate.read_text(encoding="utf-8")))
+                except Exception as e:
+                    raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=404, detail="overview not found")
+
+    @app.get("/api/sessions/{session_id}/synthesis")
+    async def api_synthesis(session_id: str) -> JSONResponse:
+        root = (cfg.data_dir / "artifacts" / session_id).resolve()
+        for candidate in [root / "final" / "synthesis.json", root / "synthesis.json"]:
+            if candidate.is_file():
+                try:
+                    return JSONResponse(json.loads(candidate.read_text(encoding="utf-8")))
+                except Exception as e:
+                    raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=404, detail="synthesis not found")
+
+    @app.get("/api/sessions/{session_id}/sources")
+    async def api_sources(session_id: str) -> JSONResponse:
+        root = (cfg.data_dir / "artifacts" / session_id).resolve()
+        for candidate in [root / "final" / "synthesis.json", root / "synthesis.json"]:
+            if candidate.is_file():
+                try:
+                    data = json.loads(candidate.read_text(encoding="utf-8"))
+                    return JSONResponse(data.get("sources", data))
+                except Exception as e:
+                    raise HTTPException(status_code=500, detail=str(e))
+        for candidate in [root / "final" / "sources.json", root / "sources.json"]:
+            if candidate.is_file():
+                try:
+                    return JSONResponse(json.loads(candidate.read_text(encoding="utf-8")))
+                except Exception as e:
+                    raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=404, detail="sources not found")
 
     @app.get("/api/sessions/{session_id}/events")
     async def api_events(session_id: str) -> EventSourceResponse:
