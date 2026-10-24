@@ -31,6 +31,49 @@ class SearchIndexSpec:
 
 SEARCH_INDEX_SPECS: list[SearchIndexSpec] = []
 
+_LIB_FILTERS = [{"type": "filter", "path": "kind"}, {"type": "filter", "path": "year"}]
+
+LIBRARY_TEXT_INDEX: dict = {
+    "mappings": {
+        "dynamic": False,
+        "fields": {
+            "text": {"type": "string", "analyzer": "lucene.english"},
+            "title": {"type": "string", "analyzer": "lucene.english"},
+            "section": {"type": "string"},
+            "kind": {"type": "token"},
+            "pmcid": {"type": "token"},
+            "year": {"type": "number"},
+        },
+    }
+}
+
+
+def library_vec_definition(cfg: Config) -> dict:
+    """Vector index for `library`: Atlas autoEmbed on `text`, or a client `embedding`."""
+    if cfg.library.embedding == "auto":
+        field = {
+            "type": "autoEmbed",
+            "modality": "text",
+            "path": "text",
+            "model": cfg.library.embed_model,
+        }
+    else:
+        field = {
+            "type": "vector",
+            "path": "embedding",
+            "numDimensions": cfg.embeddings.dim,
+            "similarity": "dotProduct",
+        }
+    return {"fields": [field, *_LIB_FILTERS]}
+
+# Names are static; they equal the `LibraryCfg` defaults (asserted in a test).
+SEARCH_INDEX_SPECS.extend(
+    [
+        SearchIndexSpec("library", "library_text", "search", lambda cfg: LIBRARY_TEXT_INDEX),
+        SearchIndexSpec("library", "library_vec", "vectorSearch", library_vec_definition),
+    ]
+)
+
 _A, _D = ASCENDING, DESCENDING
 
 BTREE_INDEXES: dict[str, list[IndexModel]] = {

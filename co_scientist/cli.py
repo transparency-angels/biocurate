@@ -32,6 +32,10 @@ app = typer.Typer(
 )
 tools_app = typer.Typer(help="Tool registry inspection and debug invocation.", no_args_is_help=True)
 app.add_typer(tools_app, name="tools")
+library_app = typer.Typer(
+    help="Evidence library (Europe PMC full text on Atlas).", no_args_is_help=True
+)
+app.add_typer(library_app, name="library")
 
 console = Console()
 log = get_logger("cli")
@@ -788,6 +792,71 @@ def tools_list(ctx: typer.Context) -> None:
         ts = reg.tools_for(agent)
         tbl2.add_row(agent, str(len(ts)), ", ".join(sorted(patterns)) or "—")
     console.print(tbl2)
+
+
+def _require_atlas(cfg) -> None:
+    if cfg.storage.backend != "atlas":
+        console.print(
+            "[red]The evidence library needs the Atlas backend.[/red] "
+            'Set \\[storage] backend = "atlas" and MONGODB_URI.'
+        )
+        raise typer.Exit(1)
+
+
+@library_app.command("ingest")
+def library_ingest(
+    ctx: typer.Context,
+    query: str = typer.Argument(..., help="Europe PMC query; only OA full text is ingested."),
+    max_papers: int = typer.Option(10, "--max-papers", min=1, help="Papers to fetch."),
+) -> None:
+    """Fetch open-access full text for QUERY and store its passages in the library."""
+    cfg, _ = ctx.obj
+    _require_atlas(cfg)
+    from .library.ingest import ingest_query
+
+    async def _run():
+        await db_mod.init_db(cfg)  # ensures the library search indexes exist
+        conn = await db_mod.connect(cfg)
+        try:
+            return await ingest_query(conn, cfg, query, max_papers=max_papers)
+        finally:
+            await conn.close()
+
+    rep = asyncio.run(_run())
+    console.print(f"papers ingested: {rep.papers}")
+    console.print(f"passages stored: {rep.passages}")
+    console.print(f"already present: {', '.join(rep.already_present) or '-'}")
+    console.print(f"skipped (no full text / unparseable): {', '.join(rep.skipped) or '-'}")
+
+
+@library_app.command("stats")
+def library_stats(ctx: typer.Context) -> None:
+    """Show the library passage count and the status of its search indexes."""
+    cfg, _ = ctx.obj
+    _require_atlas(cfg)
+    from .storage.atlas import library as lib_store
+    from .storage.atlas.indexes import SEARCH_INDEX_SPECS
+
+    async def _run():
+        conn = await db_mod.connect(cfg)
+        try:
+            n = await lib_store.count(conn)
+            cur = await conn.coll("library").list_search_indexes()
+            have = {d["name"]: d for d in await cur.to_list()}
+            return n, have
+        finally:
+            await conn.close()
+
+    n, have = asyncio.run(_run())
+    console.print(f"passages: {n}")
+    for spec in (s for s in SEARCH_INDEX_SPECS if s.collection == "library"):
+        d = have.get(spec.name)
+        if d is None:
+            console.print(f"index {spec.name}: missing (run `library ingest` to create)")
+        else:
+            console.print(
+                f"index {spec.name}: status={d.get('status')} queryable={d.get('queryable')}"
+            )
 
 
 def main() -> None:  # pragma: no cover
