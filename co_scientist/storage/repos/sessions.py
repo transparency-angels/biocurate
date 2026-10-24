@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from datetime import UTC, datetime
 
@@ -46,6 +47,23 @@ async def fetch(conn: aiosqlite.Connection, session_id: str) -> Session | None:
     if row is None:
         return None
     return _row_to_session(row)
+
+
+async def fetch_row(conn: aiosqlite.Connection, session_id: str) -> dict | None:
+    """Raw session row as a plain dict (stored strings untouched).
+
+    Only `research_plan` and `config_snapshot` are JSON-decoded; if decoding
+    fails the stored string is left as-is.
+    """
+    async with conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)) as cur:
+        row = await cur.fetchone()
+    if row is None:
+        return None
+    out = dict(row)
+    for col in ("research_plan", "config_snapshot"):
+        with contextlib.suppress(Exception):
+            out[col] = json.loads(out[col])
+    return out
 
 
 async def set_status(conn: aiosqlite.Connection, session_id: str, status: str) -> None:

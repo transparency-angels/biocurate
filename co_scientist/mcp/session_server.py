@@ -556,10 +556,9 @@ class SessionMcpServer:
     async def _t_session_status(self, args: dict[str, Any]) -> dict[str, Any]:
         session_id = _require_str(args, "session_id")
         async with self._db() as conn:
-            session = await sess_repo.fetch(conn, session_id)
-            if session is None:
+            out = await sess_repo.fetch_row(conn, session_id)
+            if out is None:
                 raise _ToolError(f"no such session: {session_id}")
-            out = session.model_dump(mode="json")
             out["task_counts"] = await task_repo.count_by_status(conn, session_id)
             out["hypothesis_states"] = await hyp_repo.count_by_state(conn, session_id)
             out["matches_played"] = await tourney_repo.count_matches(conn, session_id)

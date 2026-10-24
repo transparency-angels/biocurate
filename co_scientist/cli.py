@@ -295,10 +295,9 @@ def status(ctx: typer.Context, session_id: str = typer.Argument(...)) -> None:
     async def _run() -> dict:
         conn = await db_mod.connect(cfg)
         try:
-            session = await sess_repo.fetch(conn, session_id)
-            if session is None:
+            out = await sess_repo.fetch_row(conn, session_id)
+            if out is None:
                 return {}
-            out = session.model_dump(mode="json")
             out["task_counts"] = await task_repo.count_by_status(conn, session_id)
             out["hypothesis_states"] = await hyp_repo.count_by_state(conn, session_id)
             return out

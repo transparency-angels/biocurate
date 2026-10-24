@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -361,3 +362,27 @@ async def test_tool_call_counts(conn) -> None:
         payload={"is_error": True},
     )
     assert await events_repo.tool_call_counts(conn, s.id) == (3, 1)
+
+
+@pytest.mark.asyncio
+async def test_fetch_row_keeps_stored_strings(conn) -> None:
+    s = await _make_session(conn)
+    row = await sess_repo.fetch_row(conn, s.id)
+    assert row is not None
+    assert row["created_at"] == s.created_at.isoformat()
+    assert row["created_at"].endswith("+00:00")
+    assert row["updated_at"].endswith("+00:00")
+    assert row["wall_deadline"] is None
+    assert row["research_plan"] == json.loads(s.research_plan.model_dump_json())
+    assert row["config_snapshot"] == {"k": 1}
+    assert list(row)[:3] == ["id", "created_at", "updated_at"]
+    assert await sess_repo.fetch_row(conn, "missing") is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_row_passes_malformed_json_through(conn) -> None:
+    s = await _make_session(conn)
+    await conn.execute("UPDATE sessions SET config_snapshot='{oops' WHERE id=?", (s.id,))
+    await conn.commit()
+    row = await sess_repo.fetch_row(conn, s.id)
+    assert row is not None and row["config_snapshot"] == "{oops"
