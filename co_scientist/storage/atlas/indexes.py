@@ -52,7 +52,11 @@ BTREE_INDEXES: dict[str, list[IndexModel]] = {
             partialFilterExpression={"idempotency_key": {"$type": "string"}},
         ),
     ],
-    "tournament_matches": [IndexModel([("session_id", _A), ("created_at", _D)], name="mat_sess")],
+    "tournament_matches": [
+        IndexModel([("session_id", _A), ("created_at", _D)], name="mat_sess"),
+        IndexModel([("hyp_a", _A), ("created_at", _A)], name="mat_hyp_a"),
+        IndexModel([("hyp_b", _A), ("created_at", _A)], name="mat_hyp_b"),
+    ],
     "transcripts": [IndexModel([("session_id", _A), ("started_at", _D)], name="trn_sess")],
     "system_feedback": [
         IndexModel([("session_id", _A), ("active", _A), ("created_at", _D)], name="fb_sess_active")

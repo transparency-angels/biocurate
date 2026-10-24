@@ -675,3 +675,269 @@ async def test_embeddings_meta(any_conn) -> None:
          "faiss_offset": 7, "text_hash": "z"},
     ]
     assert await emb_repo.list_for_session(any_conn, "empty") == []
+
+
+# --------------------------------------------------------------------------- #
+# Task queue + Elo transaction (Task 5)
+
+
+def _task(session_id: str, n: int = 0, **kw) -> Task:
+    base = dict(
+        id=f"tsk_{session_id}_{n}", session_id=session_id, created_at=_now(),
+        agent="reflection", action="ReviewHypothesis", target_id="hyp_z",
+        payload={"n": n}, priority=100, status="pending",
+    )
+    base.update(kw)
+    return Task(**base)
+
+
+async def _read_task(conn, task_id: str) -> dict:
+    """Raw field read, backend-neutral, for fields the model hides behind a claim."""
+    from co_scientist.storage.atlas.client import AtlasConn
+
+    if isinstance(conn, AtlasConn):
+        return await conn.coll("tasks").find_one({"_id": task_id})
+    async with conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)) as cur:
+        return dict(await cur.fetchone())
+
+
+async def _set_error(conn, task_id: str, err: str | None) -> None:
+    """Backend-neutral direct write of last_error (no repo function sets it alone)."""
+    from co_scientist.storage.atlas.client import AtlasConn
+
+    if isinstance(conn, AtlasConn):
+        await conn.coll("tasks").update_one({"_id": task_id}, {"$set": {"last_error": err}})
+    else:
+        await conn.execute("UPDATE tasks SET last_error=? WHERE id=?", (err, task_id))
+        await conn.commit()
+
+
+async def _seed_elo_pair(any_conn, sid: str):
+    await _seed_hyps(any_conn, sid)
+    a, b = f"hyp_{sid}_0", f"hyp_{sid}_1"
+    await tourney_repo.insert_match(any_conn, _match(sid, 1, a, b))
+    return a, b
+
+
+def _elo_kwargs(a: str, b: str) -> dict:
+    return dict(
+        match_id="m1", hyp_a=a, hyp_b=b, winner="a",
+        elo_a_before=1200.0, elo_b_before=1250.0,
+        elo_a_after=1216.0, elo_b_after=1234.0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_elo_update_is_idempotent(any_conn) -> None:
+    s = await _make_session(any_conn)
+    a, b = await _seed_elo_pair(any_conn, s.id)
+    kw = _elo_kwargs(a, b)
+    assert await tourney_repo.apply_elo_update(any_conn, **kw) is True
+    assert await tourney_repo.apply_elo_update(any_conn, **kw) is False
+    ha, hb = await hyp_repo.fetch(any_conn, a), await hyp_repo.fetch(any_conn, b)
+    assert (ha.matches_played, ha.elo) == (1, 1216.0)
+    assert (hb.matches_played, hb.elo) == (1, 1234.0)
+    (m,) = await tourney_repo.list_for_hypothesis(any_conn, a)
+    assert (m.elo_a_after, m.elo_b_after) == (1216.0, 1234.0)
+
+
+@pytest.mark.asyncio
+async def test_claim_one_concurrent_claims_are_exclusive(any_conn) -> None:
+    import asyncio
+
+    s = await _make_session(any_conn)
+    for n in range(5):
+        assert await task_repo.enqueue(any_conn, _task(s.id, n)) is True
+    results = await asyncio.gather(
+        *(task_repo.claim_one(any_conn, s.id, f"w{i}", lease_seconds=60) for i in range(10))
+    )
+    got = [r.id for r in results if r is not None]
+    assert len(got) == 5 and len(set(got)) == 5
+    assert sum(r is None for r in results) == 5
+
+
+@pytest.mark.asyncio
+async def test_reclaim_expired_leases_dead_letters_at_max_attempts(any_conn) -> None:
+    s = await _make_session(any_conn)
+    t = _task(s.id, 0)
+    assert await task_repo.enqueue(any_conn, t) is True
+    for _ in range(2):  # attempts -> 2, back to pending
+        await task_repo.claim_one(any_conn, s.id, "w", lease_seconds=60)
+        assert await task_repo.fail(any_conn, t.id, "e", max_attempts=99) == "pending"
+    await task_repo.claim_one(any_conn, s.id, "w", lease_seconds=-5)  # already expired
+    await _set_error(any_conn, t.id, None)
+    out = await task_repo.reclaim_expired_leases(any_conn, s.id, max_attempts=3)
+    assert out == {"requeued": 0, "dead": 1}
+    row = await _read_task(any_conn, t.id)
+    assert row["status"] == "dead" and row["attempts"] == 3
+    assert row["last_error"] == " [lease expired; max attempts]"
+    assert row["finished_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_reclaim_expired_leases_requeues_below_max(any_conn) -> None:
+    s = await _make_session(any_conn)
+    expired = _task(s.id, 0, priority=1)
+    live = _task(s.id, 1, priority=2)
+    for t in (expired, live):
+        await task_repo.enqueue(any_conn, t)
+    assert (await task_repo.claim_one(any_conn, s.id, "w", lease_seconds=-5)).id == expired.id
+    await task_repo.mark_in_progress(any_conn, expired.id)
+    await _set_error(any_conn, expired.id, "boom")
+    assert (await task_repo.claim_one(any_conn, s.id, "w", lease_seconds=3600)).id == live.id
+    out = await task_repo.reclaim_expired_leases(any_conn, max_attempts=3)
+    assert out == {"requeued": 1, "dead": 0}
+    row = await _read_task(any_conn, expired.id)
+    assert row["status"] == "pending" and row["attempts"] == 1
+    assert row["last_error"] == "boom [lease expired]"
+    assert row["lease_owner"] is None and row["lease_expires_at"] is None
+    assert (await _read_task(any_conn, live.id))["status"] == "leased"
+
+
+@pytest.mark.asyncio
+async def test_enqueue_duplicate_idempotency_key_returns_false(any_conn) -> None:
+    s = await _make_session(any_conn)
+    t1 = _task(s.id, 0, idempotency_key="k1")
+    t2 = _task(s.id, 1, idempotency_key="k1")
+    assert await task_repo.enqueue(any_conn, t1) is True
+    assert await task_repo.enqueue(any_conn, t2) is False
+    # without a key, any number of tasks may coexist
+    assert await task_repo.enqueue(any_conn, _task(s.id, 2)) is True
+    assert await task_repo.enqueue(any_conn, _task(s.id, 3)) is True
+
+
+@pytest.mark.asyncio
+async def test_task_fail_requeues_then_dead_letters(any_conn) -> None:
+    s = await _make_session(any_conn)
+    t = _task(s.id, 0)
+    await task_repo.enqueue(any_conn, t)
+    assert await task_repo.fail(any_conn, "nope", "e", max_attempts=2) == "missing"
+    claimed = await task_repo.claim_one(any_conn, s.id, "w", lease_seconds=60)
+    assert claimed is not None and claimed.started_at is not None
+    assert await task_repo.fail(any_conn, t.id, "e1", max_attempts=2) == "pending"
+    row = await _read_task(any_conn, t.id)
+    assert row["status"] == "pending" and row["attempts"] == 1
+    assert row["last_error"] == "e1" and row["lease_owner"] is None
+    assert row["started_at"] is None
+    assert await task_repo.fail(any_conn, t.id, "x" * 5000, max_attempts=2) == "dead"
+    row = await _read_task(any_conn, t.id)
+    assert row["status"] == "dead" and row["attempts"] == 2
+    assert row["last_error"] == "x" * 4000 and row["finished_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_task_lifecycle_helpers_and_counts(any_conn) -> None:
+    s = await _make_session(any_conn)
+    ts = [_task(s.id, n, priority=n) for n in range(4)]
+    for t in ts:
+        await task_repo.enqueue(any_conn, t)
+    first = await task_repo.claim_one(any_conn, s.id, "w", lease_seconds=60)
+    assert first.id == ts[0].id and first.lease_owner == "w"
+    assert first.lease_expires_at is not None
+    await task_repo.mark_in_progress(any_conn, first.id)
+    await task_repo.heartbeat(any_conn, first.id, lease_seconds=120)
+    row = await _read_task(any_conn, first.id)
+    assert row["status"] == "in_progress" and row["lease_expires_at"] > first.lease_expires_at
+    # heartbeat ignores tasks that are not leased / in progress
+    await task_repo.heartbeat(any_conn, ts[1].id, lease_seconds=120)
+    assert (await _read_task(any_conn, ts[1].id)).get("lease_expires_at") is None
+    await task_repo.complete(any_conn, first.id)
+    assert (await _read_task(any_conn, first.id))["finished_at"] is not None
+    assert await task_repo.cancel_pending_for_session(any_conn, s.id) == 3
+    assert await task_repo.count_by_status(any_conn, s.id) == {"done": 1, "cancelled": 3}
+
+
+@pytest.mark.asyncio
+async def test_tournament_counts_and_rationales(any_conn) -> None:
+    s = await _make_session(any_conn)
+    await _seed_hyps(any_conn, s.id)
+    a, b = f"hyp_{s.id}_0", f"hyp_{s.id}_1"
+    ms = [_match(s.id, 1, a, b), _match(s.id, 2, a, b, "invalid"), _match(s.id, 3, a, b)]
+    ms[0] = ms[0].model_copy(update={"rationale": "r1", "similarity": 0.5})
+    ms[2] = ms[2].model_copy(update={"rationale": "r3"})
+    for m in ms:
+        assert await tourney_repo.insert_match(any_conn, m) is True
+    assert await tourney_repo.insert_match(any_conn, ms[0]) is False
+    assert await tourney_repo.count_matches(any_conn, s.id) == 2  # 'invalid' excluded
+    assert await tourney_repo.recent_rationales(any_conn, s.id) == ["r3", "r1"]
+    assert await tourney_repo.recent_rationales(any_conn, s.id, limit=1) == ["r3"]
+    assert await tourney_repo.recent_rationales(any_conn, s.id, limit=0) == []
+    assert await tourney_repo.list_for_session(any_conn, s.id, limit=0) == []
+    full = await tourney_repo.list_for_session(any_conn, s.id, limit=10)
+    assert full[-1] == ms[0]
+
+
+@pytest.mark.asyncio
+async def test_apply_elo_update_rolls_back_on_failure(any_conn) -> None:
+    from co_scientist.storage.atlas.client import AtlasConn
+
+    if not isinstance(any_conn, AtlasConn):
+        pytest.skip("transaction rollback is exercised on Atlas only")
+
+    s = await _make_session(any_conn)
+    a, b = await _seed_elo_pair(any_conn, s.id)
+
+    class _Boom:
+        def __init__(self, inner):
+            self._inner = inner
+
+        async def update_one(self, *args, **kwargs):
+            raise RuntimeError("boom after journal + hypothesis updates")
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    class _FailingConn(AtlasConn):
+        def coll(self, name):
+            c = super().coll(name)
+            return _Boom(c) if name == "tournament_matches" else c
+
+    bad = _FailingConn(client=any_conn.client, db=any_conn.db, prefix=any_conn.prefix)
+    with pytest.raises(RuntimeError, match="boom"):
+        await tourney_repo.apply_elo_update(bad, **_elo_kwargs(a, b))
+
+    assert await any_conn.coll("elo_journal").count_documents({}) == 0
+    ha, hb = await hyp_repo.fetch(any_conn, a), await hyp_repo.fetch(any_conn, b)
+    assert (ha.matches_played, ha.elo) == (0, 1200.0)
+    assert (hb.matches_played, hb.elo) == (0, 1250.0)
+    # and the same match can still be applied afterwards
+    assert await tourney_repo.apply_elo_update(any_conn, **_elo_kwargs(a, b)) is True
+
+
+@pytest.mark.asyncio
+async def test_apply_elo_update_retries_transient_transaction_error(any_conn) -> None:
+    from pymongo.errors import PyMongoError
+
+    from co_scientist.storage.atlas.client import AtlasConn
+
+    if not isinstance(any_conn, AtlasConn):
+        pytest.skip("transaction retry is exercised on Atlas only")
+
+    s = await _make_session(any_conn)
+    a, b = await _seed_elo_pair(any_conn, s.id)
+    calls = {"n": 0}
+
+    class _Flaky:
+        def __init__(self, inner):
+            self._inner = inner
+
+        async def update_one(self, *args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise PyMongoError("simulated", error_labels=["TransientTransactionError"])
+            return await self._inner.update_one(*args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    class _FlakyConn(AtlasConn):
+        def coll(self, name):
+            c = super().coll(name)
+            return _Flaky(c) if name == "tournament_matches" else c
+
+    flaky = _FlakyConn(client=any_conn.client, db=any_conn.db, prefix=any_conn.prefix)
+    assert await tourney_repo.apply_elo_update(flaky, **_elo_kwargs(a, b)) is True
+    assert calls["n"] == 2  # first attempt aborted, retried once
+    assert await any_conn.coll("elo_journal").count_documents({}) == 1
+    ha = await hyp_repo.fetch(any_conn, a)
+    assert (ha.matches_played, ha.elo) == (1, 1216.0)  # applied once, not twice

@@ -11,12 +11,16 @@ from co_scientist.models import (
     ReviewScores,
     Session,
     SystemFeedback,
+    Task,
+    TournamentMatch,
     Transcript,
 )
 from co_scientist.storage.atlas import feedback as a_fb
 from co_scientist.storage.atlas import hypotheses as a_hyp
 from co_scientist.storage.atlas import reviews as a_rev
 from co_scientist.storage.atlas import sessions as a_ses
+from co_scientist.storage.atlas import tasks as a_tasks
+from co_scientist.storage.atlas import tournaments as a_tm
 from co_scientist.storage.atlas import transcripts as a_tx
 
 T0 = datetime(2026, 10, 24, 12, 0, 0, 123000, tzinfo=UTC)
@@ -116,3 +120,41 @@ def test_transcript_doc_roundtrip() -> None:
     doc = a_tx._to_doc(t)
     assert doc["_id"] == "tx_1"
     assert a_tx._from_doc(doc) == t
+
+
+def test_task_doc_roundtrip() -> None:
+    t = Task(
+        id="tsk_1", session_id="s", created_at=T0, started_at=T0, finished_at=None,
+        agent="reflection", action="ReviewHypothesis", target_id="h",
+        payload={"a": {"b": [1]}}, priority=7, status="leased", lease_owner="w",
+        lease_expires_at=1_700_000_000_000, attempts=2, last_error="e", idempotency_key="k",
+    )
+    doc = a_tasks._to_doc(t)
+    assert doc["_id"] == "tsk_1" and "id" not in doc
+    assert doc["payload"] == {"a": {"b": [1]}}  # native subdocument
+    assert isinstance(doc["lease_expires_at"], int)
+    assert a_tasks._from_doc(doc) == t
+
+
+def test_task_doc_omits_null_idempotency_key_and_tolerates_naive_dates() -> None:
+    t = Task(
+        id="tsk_2", session_id="s", created_at=T0, agent="reflection",
+        action="ReviewHypothesis",
+    )
+    doc = a_tasks._to_doc(t)
+    # the unique partial index only covers string keys; null would still be indexed-safe,
+    # but omitting keeps documents clean
+    assert "idempotency_key" not in doc
+    doc["created_at"] = T0.replace(tzinfo=None)
+    assert a_tasks._from_doc(doc) == t
+
+
+def test_tournament_match_doc_roundtrip() -> None:
+    m = TournamentMatch(
+        id="m1", session_id="s", created_at=T0, hyp_a="a", hyp_b="b", mode="debate",
+        winner=None, elo_a_before=1200.0, elo_b_before=1210.5, elo_a_after=1216.0,
+        elo_b_after=None, rationale="r", transcript_id="tx", similarity=0.25,
+    )
+    doc = a_tm._to_doc(m)
+    assert doc["_id"] == "m1" and doc["winner"] is None and doc["elo_b_after"] is None
+    assert a_tm._from_doc(doc) == m
