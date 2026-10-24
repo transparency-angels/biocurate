@@ -257,13 +257,13 @@ def create_app(cfg: Config | None = None) -> FastAPI:
                     data = json.loads(candidate.read_text(encoding="utf-8"))
                     return JSONResponse(data.get("overview", data))
                 except Exception as e:
-                    raise HTTPException(status_code=500, detail=str(e))
+                    raise HTTPException(status_code=500, detail=str(e)) from e
         for candidate in [root / "final" / "overview.json", root / "overview.json"]:
             if candidate.is_file():
                 try:
                     return JSONResponse(json.loads(candidate.read_text(encoding="utf-8")))
                 except Exception as e:
-                    raise HTTPException(status_code=500, detail=str(e))
+                    raise HTTPException(status_code=500, detail=str(e)) from e
         raise HTTPException(status_code=404, detail="overview not found")
 
     @app.get("/api/sessions/{session_id}/synthesis")
@@ -274,7 +274,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
                 try:
                     return JSONResponse(json.loads(candidate.read_text(encoding="utf-8")))
                 except Exception as e:
-                    raise HTTPException(status_code=500, detail=str(e))
+                    raise HTTPException(status_code=500, detail=str(e)) from e
         raise HTTPException(status_code=404, detail="synthesis not found")
 
     @app.get("/api/sessions/{session_id}/sources")
@@ -286,13 +286,13 @@ def create_app(cfg: Config | None = None) -> FastAPI:
                     data = json.loads(candidate.read_text(encoding="utf-8"))
                     return JSONResponse(data.get("sources", data))
                 except Exception as e:
-                    raise HTTPException(status_code=500, detail=str(e))
+                    raise HTTPException(status_code=500, detail=str(e)) from e
         for candidate in [root / "final" / "sources.json", root / "sources.json"]:
             if candidate.is_file():
                 try:
                     return JSONResponse(json.loads(candidate.read_text(encoding="utf-8")))
                 except Exception as e:
-                    raise HTTPException(status_code=500, detail=str(e))
+                    raise HTTPException(status_code=500, detail=str(e)) from e
         raise HTTPException(status_code=404, detail="sources not found")
 
     @app.get("/api/sessions/{session_id}/events")

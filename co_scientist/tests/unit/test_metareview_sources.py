@@ -152,6 +152,8 @@ async def test_hydration_refuses_paths_outside_the_data_dir(tmp_cfg) -> None:
     assert await agent._read_record("../../etc/passwd") == {}
     assert await agent._read_record(None) == {}
     assert await agent._read_record("artifacts/does-not-exist.json") == {}
+    assert await agent._dataset_summary("../../../../outside") == ""
+    assert await agent._dataset_summary("no_such_session") == ""
 
 
 def test_final_prompt_renders_sources_and_forbids_inventing_urls() -> None:
@@ -262,51 +264,17 @@ def test_excerpt_to_bullets() -> None:
     assert not any("[L" in b for b in bullets)
 
 
-def test_enrich_sources_section_adds_subbullets_when_missing() -> None:
-    text = (
-        "# Executive summary\nConvergence noted.\n\n"
-        "# Sources\n\n"
-        "- [S1] https://pubmed.ncbi.nlm.nih.gov/12345/\n"
-        "- [S2] https://pubmed.ncbi.nlm.nih.gov/67890/\n"
+def test_final_prompt_uses_dataset_results_for_a_separate_literature_overview() -> None:
+    from co_scientist.llm.prompts import render
+
+    prompt = render(
+        "metareview.final", goal="g", preferences="", system_feedback="",
+        top_hypotheses_block="data-driven hypothesis", sources="[S1] https://paper.example",
+        dataset_summary="Kaplan-Meier analysis; log-rank p = 0.001",
     )
-    seen = {
-        "https://pubmed.ncbi.nlm.nih.gov/12345/": {
-            "title": "Paper 1",
-            "excerpt": "[L2] Finding one is significant. [L3] Mechanism involves kinase activation.",
-        },
-        "https://pubmed.ncbi.nlm.nih.gov/67890/": {
-            "title": "Paper 2",
-            "excerpt": "[L1] Finding two explains pathway. [L4] Inhibitor blocks rescue.",
-        },
-    }
-    enriched = MetaReviewAgent._enrich_sources_section(text, seen)
-    assert "- [S1] https://pubmed.ncbi.nlm.nih.gov/12345/" in enriched
-    assert "  - Finding one is significant." in enriched
-    assert "  - Mechanism involves kinase activation." in enriched
-    assert "- [S2] https://pubmed.ncbi.nlm.nih.gov/67890/" in enriched
-    assert "  - Finding two explains pathway." in enriched
-
-
-def test_format_sources_raw_includes_line_numbers_and_excerpts() -> None:
-    seen = {
-        "https://pubmed.ncbi.nlm.nih.gov/40845099/": {
-            "title": "Paper TDCA",
-            "doi": "10.1126/sciadv.adt9645",
-            "year": 2025,
-            "line_range": "L4-L5",
-            "refs": ["hyp_123"],
-            "excerpts": [
-                "[L4] TDCA binds to P2Y10 receptor.\n[L5] Induces Zfp414 transcription.",
-            ],
-        }
-    }
-    raw_log = MetaReviewAgent._format_sources_raw("ses_abc", seen)
-    assert "RAW SOURCES LOG" in raw_log
-    assert "Session:   ses_abc" in raw_log
-    assert "SOURCE:     [S1]" in raw_log
-    assert "LINE RANGE: L4-L5" in raw_log
-    assert "REFERENCES: hyp_123" in raw_log
-    assert "[L4] TDCA binds to P2Y10 receptor." in raw_log
-    assert "[L5] Induces Zfp414 transcription." in raw_log
-
-
+    assert "Kaplan-Meier analysis; log-rank p = 0.001" in prompt
+    assert "# Executive summary" in prompt
+    assert "# Main research directions" in prompt
+    assert "# Sources" in prompt
+    assert "../data_analysis/summary.md" in prompt
+    assert "never invent" in prompt

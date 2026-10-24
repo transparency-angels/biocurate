@@ -29,11 +29,11 @@ Turn 1: begin with a concise summary of both hypotheses and their respective ini
 Subsequent turns:
 - Pose clarifying questions to address any ambiguities or uncertainties.
 - Critically evaluate each hypothesis in relation to the stated Goal and Criteria. This evaluation should consider aspects such as:
-   - Potential for correctness/validity.
-   - Utility and practical applicability.
-   - Sufficiency of detail and specificity.
-   - Novelty and originality.
-   - Desirability for implementation.
+   - Scientific significance and mechanistic depth (soundness of biological pathway and causal model).
+   - Empirical data consistency (grounding in observed patient/study cohort evidence).
+   - Potential translational impact (clinical feasibility, diagnostic viability, and therapeutic actionability).
+   - Novelty and originality relative to established literature.
+   - Testability and experimental tractability.
 - Identify and articulate any weaknesses, limitations, or potential flaws in either hypothesis.
 
 Additional notes:

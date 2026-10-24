@@ -24,7 +24,7 @@ from ..logging import get_logger
 from ..models import SystemFeedback, Task, TaskResult
 from ..models.hypothesis import CitedPaper
 from ..models.review import Evidence
-from ..storage.artifacts import session_root, write_json, write_text
+from ..storage.artifacts import write_json
 from ..storage.repos import feedback as fb_repo
 from ..storage.repos import hypotheses as hyp_repo
 from ..storage.repos import reviews as rev_repo
@@ -515,9 +515,9 @@ class MetaReviewAgent(BaseAgent):
                 dir_content = dm.group(2).strip()
                 dir_content_clean = re.sub(r"\n+---\s*$", "", dir_content).strip()
 
-                def _extract_field(patterns: list[str]) -> str:
+                def _extract_field(patterns: list[str], text: str = dir_content_clean) -> str:
                     for p in patterns:
-                        fm = re.search(p, dir_content_clean, re.IGNORECASE | re.DOTALL)
+                        fm = re.search(p, text, re.IGNORECASE | re.DOTALL)
                         if fm:
                             return fm.group(1).strip()
                     return ""
@@ -529,8 +529,8 @@ class MetaReviewAgent(BaseAgent):
                     r"\*\*Direction\.?\*\*\s*(.*?)(?=(?:\n\s*\*\*|\Z))",
                 ])
                 why_promising = _extract_field([
-                    r"-\s*\*\*Why it['’]s promising\.?\*\*\s*(.*?)(?=(?:\n\s*-\s*\*\*|\Z))",
-                    r"\*\*Why it['’]s promising\.?\*\*\s*(.*?)(?=(?:\n\s*\*\*|\Z))",
+                    r"-\s*\*\*Why it['\u2019]s promising\.?\*\*\s*(.*?)(?=(?:\n\s*-\s*\*\*|\Z))",
+                    r"\*\*Why it['\u2019]s promising\.?\*\*\s*(.*?)(?=(?:\n\s*\*\*|\Z))",
                     r"-\s*\*\*Promising\.?\*\*\s*(.*?)(?=(?:\n\s*-\s*\*\*|\Z))",
                 ])
                 open_questions = _extract_field([
@@ -582,6 +582,19 @@ class MetaReviewAgent(BaseAgent):
 
     # ----------------------------- final overview ----------------------------- #
 
+    async def _dataset_summary(self, session_id: str) -> str:
+        """Load the separate empirical report as context for literature synthesis."""
+        base = self.deps.cfg.data_dir.resolve()
+        path = (self.deps.cfg.session_artifact_dir(session_id) / "data_analysis" / "summary.md").resolve()
+        try:
+            path.relative_to(base)
+        except ValueError:
+            return ""
+        try:
+            return await asyncio.to_thread(path.read_text, encoding="utf-8")
+        except OSError:
+            return ""
+
     async def _final_overview(self, task: Task) -> TaskResult:
         session = await sess_repo.fetch(self.deps.db, task.session_id)
         if session is None:
@@ -624,6 +637,7 @@ class MetaReviewAgent(BaseAgent):
         hydrated_hyps, hydrated_reviews = await self._hydrate_sources(top, all_reviews)
         seen_sources = self._collect_sources(hydrated_hyps, hydrated_reviews)
         sources = self._source_block(hydrated_hyps, hydrated_reviews)
+        dataset_summary = await self._dataset_summary(session.id)
 
         prompt = render(
             "metareview.final",
@@ -632,6 +646,7 @@ class MetaReviewAgent(BaseAgent):
             system_feedback=latest_fb.text if latest_fb else "",
             top_hypotheses_block=top_block,
             sources=sources,
+            dataset_summary=dataset_summary,
         )
         r = route(self.deps.cfg, "metareview", "final")
         spec = AgentCallSpec(
@@ -657,9 +672,17 @@ class MetaReviewAgent(BaseAgent):
         text = self._final_text(resp)
         if not text.strip():
             text = "# Research overview\n\n_(No content was generated; see transcripts.)_"
-
         # Split # Sources from overview markdown into clean overview + structured bullets
         clean_text, parsed_bullets = self._split_sources_section(text)
+
+        # Append the dataset pointer after the split: the LLM text ends with
+        # "# Sources", so appending earlier would file it under the sources.
+        if dataset_summary and "../data_analysis/summary.md" not in clean_text:
+            clean_text = clean_text.rstrip() + (
+                "\n\n## Dataset analysis\n\n"
+                "Survival statistics and plots are available in the separate "
+                "[dataset analysis summary](../data_analysis/summary.md).\n"
+            )
 
         citations = self.extract_citations(clean_text)
         log.info(

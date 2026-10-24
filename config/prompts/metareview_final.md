@@ -14,10 +14,30 @@ Top-ranked hypotheses (ordered by tournament Elo, with their reviews and winning
 Sources the investigation actually consulted (with line numbers `[L#]` from the extracted text). Every URL below appeared in a search or fetch result during generation or review — these are the only citations you may use:
 {{ sources | default('(no literature sources were recorded for this session)', true) }}
 
+{% if dataset_summary | default('') %}
+Empirical dataset analysis, produced separately from the literature review:
+{{ dataset_summary }}
+
+Write the literature and mechanistic research overview as a separate report.
+Use the dataset results to ground observed associations, and distinguish these
+observations from literature-supported mechanisms and proposed explanations.
+Link to `[dataset analysis summary](../data_analysis/summary.md)` for the full
+statistical methods and survival plots. Keep the research-overview structure
+below; the dataset report is a separate output.
+{% endif %}
+
 Your job is to produce a coherent research overview that the scientist can act on. Structure your response as follows:
 
 # Executive summary
 (3-5 sentences: what the tournament converged on and why it matters.)
+
+# Top Ranked Hypotheses & Translational Impact
+Explicitly detail the top three (3) most promising hypotheses (ranked by tournament Elo, scientific significance, and potential translational impact):
+For each hypothesis:
+- **Hypothesis ID & Title:** `[H-...]`
+- **Biomarker & Drug Relationship:** Observed clinical relationship and empirical dataset support.
+- **Mechanistic Explanation:** Biological pathway and molecular rationale explaining the relationship.
+- **Scientific Significance & Translational Impact:** Clinical utility, druggability/actionability, and therapeutic implications.
 
 # Main research directions
 For each direction, write a short section with:

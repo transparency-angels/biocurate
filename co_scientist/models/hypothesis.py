@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -12,7 +12,7 @@ HypothesisState = Literal[
 ]
 HypothesisStrategy = Literal[
     "literature", "debate", "combine", "simplify", "out_of_box", "feasibility", "assumption",
-    "feedback_driven",
+    "feedback_driven", "data_driven",
 ]
 HypothesisOrigin = Literal["generation", "evolution"]
 
@@ -37,6 +37,7 @@ class Hypothesis(BaseModel):
     summary: str                 # ~3 sentences; what's embedded for proximity
     full_text: str               # detailed markdown for domain experts
     citations: list[CitedPaper] = Field(default_factory=list)
+    data_evidence: dict[str, Any] | None = None
     artifact_path: str           # relative under data_dir
     elo: float | None = None
     matches_played: int = 0
