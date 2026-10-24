@@ -860,6 +860,45 @@ def library_stats(ctx: typer.Context) -> None:
             )
 
 
+@library_app.command("search")
+def library_search(
+    ctx: typer.Context,
+    query: str = typer.Argument(..., help="What to look for in the library."),
+    k: int = typer.Option(8, "--k", min=1, max=20, help="Passages to return."),
+    kind: str | None = typer.Option(
+        None, "--kind", help="Restrict to figure, table, paragraph or abstract."
+    ),
+) -> None:
+    """Hybrid (keyword + semantic) search of the library, reranked with Voyage."""
+    cfg, _ = ctx.obj
+    _require_atlas(cfg)
+    if kind not in (None, "figure", "table", "paragraph", "abstract"):
+        console.print("[red]--kind must be figure, table, paragraph or abstract.[/red]")
+        raise typer.Exit(1)
+    from .library.search import hybrid_search
+
+    async def _run():
+        conn = await db_mod.connect(cfg)
+        try:
+            return await hybrid_search(conn, cfg, query, k=k, kind=kind)
+        finally:
+            await conn.close()
+
+    hits = asyncio.run(_run())
+    tbl = Table(title=f"library: {query}")
+    for col in ("#", "anchor_id", "kind", "title", "fused", "rerank"):
+        tbl.add_column(
+            col,
+            justify="right" if col in ("#", "fused", "rerank") else "left",
+            overflow="fold" if col == "anchor_id" else "ellipsis",
+        )
+    for i, h in enumerate(hits, 1):
+        title = h.title if len(h.title) <= 50 else h.title[:49] + "…"
+        rr = "-" if h.rerank_score is None else f"{h.rerank_score:.3f}"
+        tbl.add_row(str(i), h.anchor_id, h.kind, title, f"{h.fused_score:.4f}", rr)
+    console.print(tbl)
+
+
 def main() -> None:  # pragma: no cover
     app()
 

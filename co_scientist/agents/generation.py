@@ -52,7 +52,9 @@ class GenerationAgent(BaseAgent):
         # 1. Render the prompt and run the tool loop with `record_hypothesis` available.
         articles_block = (
             "You will gather literature using the available tools (web_search, "
-            "pubmed_search, arxiv_search, europe_pmc_search, web_fetch). Pull "
+            "pubmed_search, arxiv_search, europe_pmc_search, search_library, web_fetch). "
+            "When search_library returns passages, cite their anchor_id (e.g. "
+            "PMC1234567#F2) for the evidence you use. Pull "
             "abstracts for the most relevant items, then synthesize. After you "
             "have surveyed the literature, call `record_hypothesis` exactly once "
             "with your proposed hypothesis.\n\n"
