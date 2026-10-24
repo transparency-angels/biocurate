@@ -39,8 +39,9 @@ from ..storage.repos import (
 from ..storage.repos import (
     tournaments as tourney_repo,
 )
+from ..vectors.base import VectorStore
 from ..vectors.embedder import make_embedder
-from ..vectors.store import FaissStore
+from ..vectors.factory import make_vector_store
 from .base import BaseAgent
 
 log = get_logger("ranking")
@@ -216,7 +217,7 @@ class RankingAgent(BaseAgent):
         return min(pool, key=lambda h: abs((h.elo or 1200) - (target.elo or 1200)))
 
     def _sample_close_elo(
-        self, store: FaissStore | None, pool: list[Hypothesis]
+        self, store: VectorStore | None, pool: list[Hypothesis]
     ) -> tuple[Hypothesis, Hypothesis, float | None] | None:
         """Among pairs with |Δelo|<200, sample weighted by exp(-Δelo/200)*(1-sim)."""
         if len(pool) < 2:
@@ -251,36 +252,23 @@ class RankingAgent(BaseAgent):
                 return pair
         return pairs[-1]
 
-    async def _load_store(self, session_id: str) -> FaissStore | None:
-        """Instantiate + load the session FAISS store once for pair selection."""
+    async def _load_store(self, session_id: str) -> VectorStore | None:
+        """Instantiate + load the session vector store once for pair selection."""
         try:
             embedder = make_embedder(self.deps.cfg)
         except (RuntimeError, ValueError):
             return None
-        store = FaissStore(self.deps.cfg, session_id, dim=embedder.dim)
+        store = make_vector_store(self.deps.cfg, self.deps.db, session_id, dim=embedder.dim)
         await store.load_or_create()
         if store.n == 0:
             return None
         return store
 
     def _similarity(
-        self, store: FaissStore | None, a: Hypothesis, b: Hypothesis
+        self, store: VectorStore | None, a: Hypothesis, b: Hypothesis
     ) -> float | None:
-        """Cosine via the session's FAISS store (already L2-normalized).
-
-        Reconstructs only the two rows we need (O(2·dim)) — the previous
-        version called `reconstruct_n(0, n)` for every pair, materialising
-        the full N×dim matrix just to read two rows.
-        """
-        if store is None or store.index is None or store.n == 0:
-            return None
-        i = store.offset_of(a.id)
-        j = store.offset_of(b.id)
-        if i is None or j is None:
-            return None
-        vec_i = store.index.reconstruct(int(i))
-        vec_j = store.index.reconstruct(int(j))
-        return float(vec_i @ vec_j)
+        """Cosine via the session vector store (already L2-normalized)."""
+        return store.similarity(a.id, b.id) if store else None
 
     # ----------------------------- mode selection ----------------------------- #
 

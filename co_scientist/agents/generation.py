@@ -26,7 +26,7 @@ from ..storage.repos import feedback as fb_repo
 from ..storage.repos import hypotheses as hyp_repo
 from ..storage.repos import sessions as sess_repo
 from ..vectors.embedder import make_embedder
-from ..vectors.store import FaissStore
+from ..vectors.factory import make_vector_store
 from .base import AgentDeps, BaseAgent
 from .schemas import RECORD_HYPOTHESIS_TOOL
 
@@ -227,7 +227,9 @@ class GenerationAgent(BaseAgent):
         if vec.size == 0:
             return None, None
         v = vec[0]
-        store = FaissStore(self.deps.cfg, session_id, dim=embedder.dim)
+        store = make_vector_store(
+            self.deps.cfg, self.deps.db, session_id, dim=embedder.dim
+        )
         await store.load_or_create()
         nearest = await store.search(np.asarray(v), k=1)
         thr = self.deps.cfg.vectors.dedup_cosine_threshold
@@ -245,7 +247,9 @@ class GenerationAgent(BaseAgent):
         self, session_id: str, hypothesis_id: str, payload: dict[str, Any]
     ) -> None:
         """Write-side of dedup: add to FAISS + register the embedding."""
-        store = FaissStore(self.deps.cfg, session_id, dim=payload["dim"])
+        store = make_vector_store(
+            self.deps.cfg, self.deps.db, session_id, dim=payload["dim"]
+        )
         await store.load_or_create()
         offset = await store.add(hypothesis_id, payload["vector"])
         await store.save()

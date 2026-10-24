@@ -206,3 +206,41 @@ def test_fallback_warning_emits_once_per_process() -> None:
 
     # Exactly one warning marker recorded; subsequent calls hit the cache.
     assert {"openai_key_missing_using_hash_fallback"} == emb_mod._FALLBACK_WARNED
+
+
+@pytest.mark.asyncio
+async def test_faiss_store_similarity_matches_dot(tmp_cfg) -> None:
+    store = FaissStore(tmp_cfg, "ses_sim", dim=8)
+    await store.load_or_create()
+    va, vb = _vec(1), _vec(2)
+    await store.add("hyp_a", va)
+    await store.add("hyp_b", vb)
+    assert store.similarity("hyp_a", "hyp_b") == pytest.approx(float(va @ vb))
+    assert store.similarity("hyp_a", "nope") is None
+    assert store.similarity("nope", "hyp_b") is None
+    assert store.ids() == ["hyp_a", "hyp_b"]
+
+
+@pytest.mark.asyncio
+async def test_faiss_store_satisfies_protocol(tmp_cfg) -> None:
+    import inspect
+
+    from co_scientist.vectors.base import VectorStore
+
+    store = FaissStore(tmp_cfg, "ses_proto", dim=8)
+    assert isinstance(store, VectorStore)
+    # runtime_checkable only checks member presence; check async-ness too.
+    for name in ("load_or_create", "add", "save", "search", "cosine_matrix"):
+        assert inspect.iscoroutinefunction(getattr(store, name)), name
+        assert inspect.iscoroutinefunction(getattr(VectorStore, name)), name
+    for name in ("ids", "similarity"):
+        assert not inspect.iscoroutinefunction(getattr(store, name)), name
+
+
+@pytest.mark.asyncio
+async def test_make_vector_store_defaults_to_faiss(tmp_cfg, conn) -> None:
+    from co_scientist.vectors.factory import make_vector_store
+
+    store = make_vector_store(tmp_cfg, conn, "ses_fac", dim=8)
+    assert isinstance(store, FaissStore)
+    assert store.dim == 8

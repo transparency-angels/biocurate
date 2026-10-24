@@ -32,7 +32,7 @@ from ..storage.repos import hypotheses as hyp_repo
 from ..storage.repos import reviews as rev_repo
 from ..storage.repos import sessions as sess_repo
 from ..vectors.embedder import make_embedder
-from ..vectors.store import FaissStore
+from ..vectors.factory import make_vector_store
 from .base import BaseAgent
 from .schemas import RECORD_HYPOTHESIS_TOOL
 
@@ -274,7 +274,9 @@ class EvolutionAgent(BaseAgent):
         if vec.size == 0:
             return None, None
         v = vec[0]
-        store = FaissStore(self.deps.cfg, session_id, dim=embedder.dim)
+        store = make_vector_store(
+            self.deps.cfg, self.deps.db, session_id, dim=embedder.dim
+        )
         await store.load_or_create()
         nearest = await store.search(np.asarray(v), k=1)
         thr = self.deps.cfg.vectors.dedup_cosine_threshold
@@ -290,7 +292,9 @@ class EvolutionAgent(BaseAgent):
     async def _dedup_commit(
         self, session_id: str, hypothesis_id: str, payload: dict[str, Any]
     ) -> None:
-        store = FaissStore(self.deps.cfg, session_id, dim=payload["dim"])
+        store = make_vector_store(
+            self.deps.cfg, self.deps.db, session_id, dim=payload["dim"]
+        )
         await store.load_or_create()
         offset = await store.add(hypothesis_id, payload["vector"])
         await store.save()
@@ -311,22 +315,19 @@ class EvolutionAgent(BaseAgent):
             embedder = make_embedder(self.deps.cfg)
         except (RuntimeError, ValueError):
             return top[0], top[1]
-        store = FaissStore(self.deps.cfg, session_id, dim=embedder.dim)
+        store = make_vector_store(
+            self.deps.cfg, self.deps.db, session_id, dim=embedder.dim
+        )
         await store.load_or_create()
         if store.n == 0:
             return top[0], top[1]
         best: tuple[Hypothesis, Hypothesis] | None = None
         best_sim = 2.0
-        vecs = store.index.reconstruct_n(0, store.n)
         for i, a in enumerate(top):
-            ia = store.offset_of(a.id)
-            if ia is None:
-                continue
             for b in top[i + 1:]:
-                ib = store.offset_of(b.id)
-                if ib is None:
+                sim = store.similarity(a.id, b.id)
+                if sim is None:
                     continue
-                sim = float(vecs[ia] @ vecs[ib])
                 if sim < best_sim:
                     best_sim = sim
                     best = (a, b)
