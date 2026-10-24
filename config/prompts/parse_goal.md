@@ -12,5 +12,7 @@ Your job:
 3. List **constraints** — explicit limits on scope, methodology, ethics, or organism/system. Empty list if none.
 4. List **idea_attributes** — adjectives a strong candidate hypothesis should have for this goal (e.g. "mechanistically specific", "experimentally tractable in mammalian cell culture"). 3-6 entries.
 5. Optionally set a **domain_hint** (e.g. "biology", "chemistry", "machine learning", "materials science") if obvious; leave null if cross-domain.
+6. Set **has_dataset** to true if the goal refers to an attached dataset, study metadata, or patient/cohort data to analyze; otherwise false.
+7. Extract any mentioned **data_sources** (filenames or paths).
 
 Call the `record_research_plan` tool with your final structured plan.
