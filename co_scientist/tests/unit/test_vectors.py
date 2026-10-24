@@ -367,12 +367,38 @@ async def test_atlas_store_search_merges_recent_and_dedupes(monkeypatch) -> None
     assert pipe["numCandidates"] == 100
 
 
-async def test_atlas_store_old_vectors_not_merged(monkeypatch) -> None:
+async def test_atlas_store_search_exact_when_index_returns_nothing(monkeypatch) -> None:
     s = await _store(_FakeVecColl(hits=[]))
+    for name, x in (("a", (1, 1)), ("b", (0, 1)), ("c", (0, 0, 1))):
+        await s.add(name, _unit(4, *x))
+    real = time.monotonic
+    monkeypatch.setattr(AS.time, "monotonic", lambda: real() + 3600)  # all "old"
+    res = await s.search(_unit(4, 1, 1), 1)
+    assert res[0][0] == "a" and res[0][1] == pytest.approx(1.0)
+
+
+async def test_atlas_store_search_trusts_full_index_results(monkeypatch) -> None:
+    s = await _store(_FakeVecColl(hits=[{"_id": "x", "score": 0.9}, {"_id": "y", "score": 0.7}]))
     await s.add("a", _unit(4, 1))
+    await s.add("b", _unit(4, 0, 1))
+    calls: list = []
+    monkeypatch.setattr(s, "_exact", lambda *a: calls.append(a) or [])
     real = time.monotonic
     monkeypatch.setattr(AS.time, "monotonic", lambda: real() + 3600)
-    assert await s.search(_unit(4, 1), 3) == []
+    res = await s.search(_unit(4, 1), 2)
+    assert calls == [] and [i for i, _ in res] == ["x", "y"]
+
+
+async def test_atlas_store_load_handles_missing_and_aware_created_at() -> None:
+    from datetime import UTC, datetime
+
+    docs = [
+        {"_id": "b", "embedding": [0, 1.0, 0, 0], "created_at": datetime(2026, 1, 1, tzinfo=UTC)},
+        {"_id": "n", "embedding": [0, 0, 1.0, 0]},
+        {"_id": "a", "embedding": [1.0, 0, 0, 0], "created_at": datetime(2026, 1, 2)},
+    ]
+    s = await _store(_FakeVecColl(docs=docs))
+    assert s.ids() == ["n", "b", "a"]
 
 
 async def test_atlas_store_search_falls_back_on_pymongo_error() -> None:

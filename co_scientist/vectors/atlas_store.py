@@ -33,6 +33,13 @@ def vector_score_to_cosine(score: float) -> float:
     return 2.0 * score - 1.0
 
 
+def _aware(dt: datetime | None) -> datetime:
+    """Sort key: BSON dates may be naive (UTC) or aware; missing sorts first."""
+    if dt is None:
+        return datetime.min.replace(tzinfo=UTC)
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+
+
 class AtlasVectorStore:
     def __init__(self, cfg: Config, conn: AtlasConn, session_id: str, dim: int) -> None:
         self.cfg = cfg
@@ -52,7 +59,7 @@ class AtlasVectorStore:
     async def load_or_create(self) -> None:
         cur = self.conn.coll(COLLECTION).find({"session_id": self.session_id})
         docs = await cur.to_list()
-        docs.sort(key=lambda d: (d.get("created_at") or datetime.min, str(d["_id"])))
+        docs.sort(key=lambda d: (_aware(d.get("created_at")), str(d["_id"])))
         self._ordered_ids, self._rows = [], []
         self._row_by_id, self._added_at = {}, {}
         for d in docs:
@@ -90,23 +97,32 @@ class AtlasVectorStore:
         if self.n == 0 or k <= 0:
             return []
         q = np.asarray(vec, dtype="float32").reshape(-1)
-        best: dict[str, float] = {}
         try:
-            for hid, cos in await self._index_hits(q, k):
-                best[hid] = max(cos, best.get(hid, -2.0))
+            hits = await self._index_hits(q, k)
         except PyMongoError as e:
             # Missing/building index must never fail the agent; log the type only.
             get_logger("vectors.atlas").warning(
                 "vector_search_fallback", error_type=type(e).__name__
             )
-            candidates = list(self._row_by_id)
-        else:
-            now = time.monotonic()
-            candidates = [h for h, t in self._added_at.items() if now - t <= RECENT_WINDOW_S]
-        for hid in candidates:
-            cos = float(self._rows[self._row_by_id[hid]] @ q)
+            return self._exact(q, k)
+        if len({h for h, _ in hits}) < min(k, len(self._row_by_id)):
+            # A missing index returns 0 hits without error; a short result hides old rows.
+            get_logger("vectors.atlas").debug("vector_search_exact_short_index")
+            return self._exact(q, k)
+        best: dict[str, float] = {}
+        for hid, cos in hits:
             best[hid] = max(cos, best.get(hid, -2.0))
+        now = time.monotonic()
+        for hid, added in self._added_at.items():
+            if now - added <= RECENT_WINDOW_S:
+                cos = float(self._rows[self._row_by_id[hid]] @ q)
+                best[hid] = max(cos, best.get(hid, -2.0))
         return sorted(best.items(), key=lambda kv: kv[1], reverse=True)[:k]
+
+    def _exact(self, q: np.ndarray, k: int) -> list[tuple[str, float]]:
+        """Exact cosine over this session's in-memory vectors (latest row per id)."""
+        scored = [(h, float(self._rows[i] @ q)) for h, i in self._row_by_id.items()]
+        return sorted(scored, key=lambda kv: kv[1], reverse=True)[:k]
 
     async def _index_hits(self, q: np.ndarray, k: int) -> list[tuple[str, float]]:
         pipeline = [
