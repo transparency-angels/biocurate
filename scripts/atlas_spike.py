@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import re
 import sys
+import time
 
 from pymongo.operations import SearchIndexModel
 
@@ -175,10 +176,12 @@ async def main() -> int:
             "c transaction": lambda: check_transaction(conn.client, db),
         }
         for label, fn in checks.items():
+            t0 = time.monotonic()
             try:
                 results[label] = await fn()
             except Exception as e:
                 results[label] = f"FAIL: {type(e).__name__}: {str(e)[:200]}"
+            results[label] += f" [{time.monotonic() - t0:.1f}s]"
     finally:
         await drop_spike(db)
         await shutdown_clients()
