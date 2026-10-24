@@ -111,15 +111,15 @@ class AnthropicClient:
         # Anthropic constraint: extended thinking is incompatible with a forced
         # tool_choice (must be "auto" or "none"). Silently drop the budget when
         # caller forced a specific tool; tool-use loops with `auto` keep thinking.
-        thinking_ok = (
-            spec.route.thinking_tokens > 0
-            and (spec.tool_choice is None or spec.tool_choice.get("type") in ("auto", "none"))
-        )
-        if thinking_ok:
-            request["thinking"] = {
-                "type": "enabled",
-                "budget_tokens": spec.route.thinking_tokens,
-            }
+        # thinking_ok = (
+        #     spec.route.thinking_tokens > 0
+        #     and (spec.tool_choice is None or spec.tool_choice.get("type") in ("auto", "none"))
+        # )
+        # if thinking_ok:
+        #     request["thinking"] = {
+        #         "type": "adaptive",
+        #         "budget_tokens": spec.route.thinking_tokens,
+        #     }
 
         # Estimate cost upfront and admit
         est_in = est_input_tokens or _rough_token_count(spec)

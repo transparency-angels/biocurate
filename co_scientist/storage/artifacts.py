@@ -101,3 +101,23 @@ async def write_text(cfg: Config, session_id: str, kind: str, id_: str, suffix: 
 
     await asyncio.to_thread(_do)
     return _rel(cfg, p)
+
+
+async def write_bytes(cfg: Config, session_id: str, kind: str, id_: str, suffix: str, body: bytes) -> str:
+    """Write a binary artifact atomically with the same path checks as text."""
+    _validate_component(kind, label="kind")
+    _validate_component(id_, label="id")
+    if "/" in suffix or ".." in suffix:
+        raise ValueError(f"suffix={suffix!r} is not a valid file suffix")
+    root = session_root(cfg, session_id)
+    p = root / kind / f"{id_}{suffix}"
+    _resolved_under(root.parent, p)
+
+    def _do() -> None:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(p.suffix + ".tmp")
+        tmp.write_bytes(body)
+        tmp.replace(p)
+
+    await asyncio.to_thread(_do)
+    return _rel(cfg, p)

@@ -16,7 +16,7 @@ Provided reviews for meta-analysis:
 Recent tournament debate rationales (for context on what wins and loses):
 {{ debate_rationales | default('(none yet)', true) }}
 
-Sources the reviewers actually consulted (every URL appeared in a real search or fetch result). Cite only from this list; never invent a URL:
+Sources the reviewers actually consulted (with line numbers `[L#]` from the extracted text; every URL appeared in a real search or fetch result). Cite only from this list; never invent a URL:
 {{ sources | default('(no literature sources were recorded)', true) }}
 
 Instructions:
@@ -24,5 +24,6 @@ Instructions:
 - Focus on identifying recurring critique points and common issues raised by reviewers.
 - The generated meta-analysis should provide actionable insights for researchers developing future proposals.
 - Refrain from evaluating individual proposals or reviews; focus on producing a synthesized meta-analysis.
+- When citing sources in your narrative, cite them with their source tag and line number(s) as `[S#, L#-L#]` (or `[S#, L#]`), e.g. `[S1, L3-L5]`.
 
 When complete, call `record_system_feedback` with `common_weaknesses[]`, `common_strengths[]`, and `suggested_focus_areas[]`. Use `narrative` for a 1-2 paragraph synthesis that will be injected into future Generation and Evolution prompts.

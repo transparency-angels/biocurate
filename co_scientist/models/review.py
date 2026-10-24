@@ -24,6 +24,7 @@ class Evidence(BaseModel):
     claim: str
     url: str
     excerpt: str
+    line_range: str | None = None
 
 
 class AssumptionCheck(BaseModel):

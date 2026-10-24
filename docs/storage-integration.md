@@ -350,17 +350,16 @@ searchable (text, vector, hybrid, rerank) and citable by agents through
 
 ### Exact citation location ("which line contributed")
 
-Citation tracing is owned by the citation-tracing work (`feature/cite-lines`).
-This branch does not change the citation models (`CitedPaper`, `Evidence`),
-`safety/citation_verifier.py`, or the prompts' citation rules.
+Line-level citation came in with the `feature/cite-lines` work (PR #1). The pieces:
 
-What the library offers that work, if it wants it: every `search_library` hit
-has a stable `anchor_id`, the full passage `text`, and a `url` that already
-carries the `#fragment`.
+- **Fetched text is numbered.** `web_fetch` prefixes each line it returns with `[L1]`, `[L2]` and so on.
+- **Agents are told to cite lines.** Agents that have `web_search` get `SYSTEM_CITATION_POLICY` (`co_scientist/safety/quoting.py`) appended to their system prompt. It asks them to cite as `[S#, L#-L#]`.
+- **Citations carry the range.** `CitedPaper.line_range` (`models/hypothesis.py`) and `Evidence.line_range` (`models/review.py`) are optional strings, for example `"L3-L5"`.
+- **The verifier ignores line markers.** `citation_verifier._normalize` strips `[S#, L#]` markers before checking that an excerpt appears at its URL.
 
-Citations are stored in the hypothesis and review JSON artifacts, not in DB
-rows. If the UI needs to query them, add a collection or table through a repo
-(§4) rather than parsing artifacts in the UI.
+**Storage impact: none.** Citations and evidence live in the hypothesis and review JSON artifacts on disk, on both backends. The Atlas and SQLite row mappers deliberately leave them out (`storage/atlas/reviews.py` `_to_doc`). So `line_range` is persisted with no schema or repo change. If the UI needs to *query* citations, for example "every hypothesis citing PMC123", add a collection or table through a repo (§4) rather than parsing artifacts in the UI.
+
+**Library passages.** Every `search_library` hit also has a stable `anchor_id`, the full passage `text`, and a `url` that carries the `#fragment`. They are available if citation tracing wants passage-level anchors in addition to line numbers.
 
 ---
 

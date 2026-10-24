@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import time
 from typing import Any
 from xml.etree import ElementTree as ET
@@ -106,6 +107,25 @@ class PubmedSearchTool:
         return await asyncio.to_thread(_parse_pubmed_xml, r.text)
 
 
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9(\[\"'])")
+
+
+def _add_line_numbers(text: str) -> str:
+    """Prepends line numbers ([L1], [L2], ...) to each sentence/line of text."""
+    if not text:
+        return ""
+    lines: list[str] = []
+    for raw_line in text.splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        if len(stripped) > 140:
+            lines.extend(p.strip() for p in _SENTENCE_SPLIT_RE.split(stripped) if p.strip())
+        else:
+            lines.append(stripped)
+    return "\n".join(f"[L{i+1}] {line}" for i, line in enumerate(lines))
+
+
 def _parse_pubmed_xml(xml: str) -> list[dict[str, Any]]:
     root = ET.fromstring(xml)
     out: list[dict[str, Any]] = []
@@ -124,7 +144,7 @@ def _parse_pubmed_xml(xml: str) -> list[dict[str, Any]]:
             label = at.get("Label")
             txt = "".join(at.itertext()).strip()
             abstract_parts.append(f"{label}: {txt}" if label else txt)
-        abstract = "\n\n".join(p for p in abstract_parts if p)
+        abstract = _add_line_numbers("\n".join(p for p in abstract_parts if p))
         authors = []
         for au in art.findall(".//Author")[:8]:
             last = au.findtext("LastName") or ""

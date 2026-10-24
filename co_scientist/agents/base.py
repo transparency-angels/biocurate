@@ -8,9 +8,9 @@ from typing import Any
 from ..config import Config
 from ..llm.provider import LLMProvider
 from ..models import Task, TaskResult
-from ..safety.quoting import SAFETY_PREAMBLE
+from ..safety.quoting import SAFETY_PREAMBLE, SYSTEM_CITATION_POLICY
 from ..storage import Conn
-from ..tools.registry import ToolRegistry
+from ..tools.registry import AGENT_TOOLS, ToolRegistry
 
 
 @dataclass
@@ -35,12 +35,19 @@ class BaseAgent:
 
     # ----------------------------- helpers ----------------------------- #
 
+    def _has_web_search(self) -> bool:
+        """Whether this agent utilizes web search tools."""
+        return "web_search" in AGENT_TOOLS.get(self.name, set())
+
     def _system_prompt_header(self) -> str:
         """Common safety preamble prepended to every agent's system prompt."""
-        return (
+        header = (
             f"You are the {self.name} agent in a multi-agent scientific research system. "
             f"Operate carefully and cite your sources. {SAFETY_PREAMBLE}"
         )
+        if self._has_web_search():
+            header = f"{header}\n\n{SYSTEM_CITATION_POLICY}"
+        return header
 
     @staticmethod
     def _final_tool_use(response, tool_name: str) -> dict[str, Any] | None:

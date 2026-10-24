@@ -212,10 +212,14 @@ class WebSearchCfg(BaseModel):
     max_results: int = 8
 
 
+CookiePolicyMode = Literal["refuse_all", "essential_only", "accept"]
+
+
 class WebFetchCfg(BaseModel):
     max_bytes: int = 5_000_000
     timeout_seconds: int = 30
     user_agent: str = "co-scientist/0.1"
+    cookie_policy: CookiePolicyMode = "refuse_all"
 
 
 class WorkspaceCfg(BaseModel):

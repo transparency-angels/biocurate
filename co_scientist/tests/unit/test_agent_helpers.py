@@ -60,3 +60,23 @@ def test_review_md_renders_sections() -> None:
     assert "plausible" in md
     assert "https://e.example/p" in md
     assert "n" in md
+
+
+def test_system_citation_policy_included_for_web_search_agents() -> None:
+    from co_scientist.agents.base import BaseAgent
+    from co_scientist.safety.quoting import SYSTEM_CITATION_POLICY
+
+    for agent_name in ("generation", "reflection", "evolution"):
+        agent = BaseAgent(deps=None)  # type: ignore
+        agent.name = agent_name
+        header = agent._system_prompt_header()
+        assert SYSTEM_CITATION_POLICY in header
+        assert "System Citation Policy:" in header
+        assert "[Doc X, L#]" in header
+
+    for agent_name in ("ranking", "proximity", "metareview"):
+        agent = BaseAgent(deps=None)  # type: ignore
+        agent.name = agent_name
+        header = agent._system_prompt_header()
+        assert SYSTEM_CITATION_POLICY not in header
+

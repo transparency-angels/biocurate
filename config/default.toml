@@ -6,9 +6,9 @@
 
 [run]
 concurrency = 4
-max_ideas = 60
-max_matches_per_idea = 12
-wall_clock_seconds = 7200            # 2h default
+max_ideas = 15
+max_matches_per_idea = 15
+wall_clock_seconds = 600            # 2h default
 budget_tokens = 5_000_000
 # Not a spend gate: a subscription has no marginal per-call price. The CLI
 # reports an equivalent API cost per call and this caps that gauge, which is
@@ -17,6 +17,8 @@ budget_tokens = 5_000_000
 budget_usd = 25.0
 
 [storage]
+# Flat research inputs (.csv, .tsv, tab-delimited .txt) are discovered here.
+# co_scientist.db in this folder is internal session state, not an input dataset.
 data_dir = "./data"
 # "sqlite": local file under data_dir, offline, FAISS for vectors (the default).
 # "atlas":  MongoDB Atlas for all state, Atlas Vector Search for vectors, and the
@@ -105,22 +107,22 @@ reserve    = 0.08
 # Switching family means replacing ALL of these. Config is deep-merged, so a key
 # you leave out keeps its OpenRouter default and gets sent to the new endpoint,
 # which will reject it. Equivalents:
-#   anthropic    "claude-opus-4-7" / "claude-sonnet-4-6" / "claude-haiku-4-5-20251001"
+#   anthropic    "gemini-4-argon" / "claude-sonnet-4-6" / "claude-haiku-4-5-20251001"
 #   gemini       "gemini-3-pro" / "gemini-3-flash"
 #   claude_cli   either the anthropic ids above, or "opus" / "sonnet" / "haiku"
 #   codex_cli    Codex model ids your ChatGPT account is entitled to
 [models]
-parse_goal          = "gemini-4-argon"
+parse_goal          = "gemini-3.8-flash"
 generation          = "gemini-4-argon"
 reflection          = "gemini-4-argon"
 evolution           = "gemini-4-argon"
-ranking_pairwise    = "gemini-4-argon"
+ranking_pairwise    = "gemini-3.8-flash"
 ranking_debate      = "gemini-4-argon"
 ranking_priority    = "gemini-4-argon"
-metareview_feedback = "gemini-4-argon"
+metareview_feedback = "gemini-3.8-flash"
 metareview_final    = "gemini-4-argon"
-classifier          = "gemini-4-argon"
-judge               = "gemini-4-argon"
+classifier          = "gemini-3.8-flash"
+judge               = "gemini-3.8-flash"
 
 # Extended-reasoning budgets, in tokens. Only `provider = "anthropic"` sends
 # these as a real thinking budget. Under the default OpenRouter provider they
@@ -188,7 +190,7 @@ max_results = 8
 max_bytes = 5_000_000
 timeout_seconds = 30
 user_agent = "co-scientist/0.1 (+research; contact via project README)"
-
+cookie_policy = "refuse_all"
 # A folder of your own material the agents may read and write: papers, data,
 # prior notes. Off until `root` is set. Setting it registers `file_list`,
 # `file_read` and `file_write` for Generation, Reflection and Evolution, under
@@ -230,11 +232,11 @@ classifier_warn_categories = ["dual_use_bio"]
 # Metered API: a vendor SDK with a per-token bill.
 #   "openrouter" — the default. 200+ models from every vendor behind one key,
 #                  so [models] can mix vendors per agent in one session. Set
-#                  OPENROUTER_API_KEY. Models: "anthropic/claude-opus-4-7",
+#                  OPENROUTER_API_KEY. Models: "anthropic/gemini-4-argon",
 #                  "openai/gpt-5", "google/gemini-3-pro".
 #   "anthropic"  — Claude via the Anthropic SDK. The only backend with prompt
 #                  cache breakpoints and the Batch API. Set ANTHROPIC_API_KEY.
-#                  Models: "claude-opus-4-7", "claude-sonnet-4-6".
+#                  Models: "gemini-4-argon", "claude-sonnet-4-6".
 #   "openai"     — OpenAI Chat Completions. Set OPENAI_API_KEY.
 #   "gemini"     — Google Gemini via OpenAI-compat endpoint. Set
 #                  GEMINI_API_KEY. Models: "gemini-3-flash", "gemini-3-pro",
@@ -281,7 +283,7 @@ max_parallel = 3
 # "default" omits reasoning_effort and uses the selected model's default.
 # For multi-step agent/tool work, "medium" is a sensible starting point.
 [llm.gemini]
-thinking_level = "default"  # default | minimal | low | medium | high
+# thinking_level = "default"  # default | minimal | low | medium | high
 
 # Optional per-mode overrides. Keys match agent routing modes.
 # [llm.gemini.thinking_by_mode]

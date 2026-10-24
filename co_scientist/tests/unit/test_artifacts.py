@@ -61,3 +61,15 @@ async def test_read_json_rejects_path_escape(tmp_path: Path) -> None:
     secret.write_text('{"x": 1}')
     with pytest.raises(ValueError):
         await artifacts.read_json(cfg, "../secret.json")
+
+
+@pytest.mark.asyncio
+async def test_write_binary_plot_and_reject_path_escape(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    payload = b"\x89PNG\r\n\x1a\nexample"
+    relative = await artifacts.write_bytes(cfg, "sess1", "data_analysis/plots", "km_1", ".png", payload)
+    assert (cfg.data_dir / relative).read_bytes() == payload
+    with pytest.raises(ValueError):
+        await artifacts.write_bytes(cfg, "sess1", "plots", "../../escape", ".png", payload)
+    with pytest.raises(ValueError):
+        await artifacts.write_bytes(cfg, "sess1", "plots", "km_1", "/../../escape.png", payload)

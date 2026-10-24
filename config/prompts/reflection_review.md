@@ -20,4 +20,4 @@ Your task:
 4. **Testability** — propose at least one concrete experiment or measurable outcome that would distinguish this hypothesis from alternatives.
 5. **Verdict** — choose exactly one of: `already_explained`, `other_more_likely`, `missing_piece`, `neutral`, `disproved`.
 
-When you have finished your analysis, call the `record_review` tool. Every claim in the `evidence` array must have a `url` and an `excerpt` (a verbatim short quote from the source). If a claim has no supporting source, do not include it; either drop it or restate it as your own analytical inference in `notes`.
+When you have finished your analysis, call the `record_review` tool. Every claim in the `evidence` array must have a `url` and an `excerpt` (a verbatim short quote from the source, preserving line numbers like `[L#]`). If a claim has no supporting source, do not include it; either drop it or restate it as your own analytical inference in `notes`.
