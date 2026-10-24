@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 
+import pytest
+
 from co_scientist import timeline
 from co_scientist.orchestrator.events import GLOBAL_BUS
 from co_scientist.storage.repos import timeline as repo
@@ -63,6 +65,48 @@ async def test_timeline_post_publishes_bus_event(any_conn):
     assert ev.name == "timeline_message"
     p = ev.payload
     assert set(p) == {"seq", "ts", "role", "agent", "kind", "title", "body_markdown", "refs"}
-    assert p["seq"] == 1 and isinstance(p["ts"], int) and p["role"] == "assistant"
+    assert p["seq"] == 1 and isinstance(p["ts"], int) and p["role"] == "system"
     assert p["body_markdown"] == "B" and p["refs"] == ["r"] and p["agent"] == "a"
     assert [m.seq for m in await repo.list_for_session(any_conn, "sb")] == [1]
+
+
+async def test_timeline_seq_increases_after_failed_insert():
+    from co_scientist.storage.atlas import timeline as atl
+
+    class Coll:
+        def __init__(self):
+            self.n = 0
+            self.fail = True
+            self.docs = []
+
+        async def find_one_and_update(self, *a, **k):
+            self.n += 1
+            return {"seq": self.n}
+
+        async def insert_one(self, doc):
+            if self.fail:
+                self.fail = False
+                raise RuntimeError("insert failed")
+            self.docs.append(doc)
+
+    c = Coll()
+
+    class Conn:
+        def coll(self, name):
+            return c
+
+    kw = dict(role="system", agent=None, kind="k", title="t", body_markdown="", refs=[])
+    with pytest.raises(RuntimeError):
+        await atl.append(Conn(), "s", **kw)
+    failed_counter = c.n
+    m = await atl.append(Conn(), "s", **kw)
+    assert m.seq > failed_counter
+
+
+async def test_timeline_post_survives_publish_failure(any_conn, monkeypatch):
+    async def boom(*a, **k):
+        raise RuntimeError("bus down")
+
+    monkeypatch.setattr(GLOBAL_BUS, "publish", boom)
+    assert await timeline.post(any_conn, "sp", kind="k", title="T") is None
+    assert [m.title for m in await repo.list_for_session(any_conn, "sp")] == ["T"]

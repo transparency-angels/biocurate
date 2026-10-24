@@ -41,7 +41,7 @@ async def post(
         msg = await timeline_repo.append(
             conn,
             session_id,
-            role="assistant" if agent else "system",
+            role="system",
             agent=agent,
             kind=kind,
             title=title,

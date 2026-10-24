@@ -39,7 +39,11 @@ async def append(
     body_markdown: str,
     refs: list[str],
 ) -> TimelineMessage:
-    """Insert with the next per-session `seq` from an atomic counter."""
+    """Insert with the next per-session `seq` from an atomic counter.
+
+    `seq` is unique and strictly increasing but may have gaps: if the insert fails
+    after the counter increment, that number is skipped. Readers use `seq > last`.
+    """
     c = await conn.coll(_COUNTERS).find_one_and_update(
         {"_id": session_id},
         {"$inc": {"seq": 1}},

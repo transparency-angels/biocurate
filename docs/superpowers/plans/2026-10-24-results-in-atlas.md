@@ -40,7 +40,7 @@
 
 1. **Zip safety.** A crafted zip with `../` member names, absolute paths, a huge declared-vs-actual size, or 10,000 members must be refused or contained, never written outside the store and never exhausting memory. → `test_unzip_rejects_traversal_bomb_and_member_flood` (Task 2).
 2. **Upload with no data at all.** A researcher attaches only PDFs, or nothing. The data-analysis agent must never run, and the session must still produce hypotheses. → `test_plan_without_tabular_attachments_skips_analysis` (Task 7).
-3. **Concurrent timeline appends.** Four workers post at once. `seq` must stay unique and gap-free per session on both backends. → `test_timeline_concurrent_appends_unique_seq` (Task 3).
+3. **Concurrent timeline appends.** Four workers post at once. `seq` must stay unique and strictly increasing per session on both backends (gap-free when no insert fails). → `test_timeline_concurrent_appends_unique_seq` (Task 3).
 4. **Large per-sample payloads.** About 24k samples per candidate. Each `analysis_points` document must stay under 16 MB, and `/research` must not load every candidate's points for every hypothesis. → `test_points_doc_size_for_24k_samples` (Task 5), `test_research_loads_only_linked_points` (Task 11).
 5. **Reconnecting SSE client.** The browser `EventSource` reconnects after a drop and must not miss or duplicate timeline messages. → `test_events_stream_resumes_timeline_after_seq` (Task 12).
 
