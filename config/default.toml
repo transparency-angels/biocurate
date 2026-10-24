@@ -94,17 +94,17 @@ reserve    = 0.08
 #   claude_cli   either the anthropic ids above, or "opus" / "sonnet" / "haiku"
 #   codex_cli    Codex model ids your ChatGPT account is entitled to
 [models]
-parse_goal          = "gemini-4-argon"
+parse_goal          = "gemini-3.8-flash"
 generation          = "gemini-4-argon"
 reflection          = "gemini-4-argon"
 evolution           = "gemini-4-argon"
-ranking_pairwise    = "gemini-4-argon"
+ranking_pairwise    = "gemini-3.8-flash"
 ranking_debate      = "gemini-4-argon"
 ranking_priority    = "gemini-4-argon"
-metareview_feedback = "gemini-4-argon"
+metareview_feedback = "gemini-3.8-flash"
 metareview_final    = "gemini-4-argon"
-classifier          = "gemini-4-argon"
-judge               = "gemini-4-argon"
+classifier          = "gemini-3.8-flash"
+judge               = "gemini-3.8-flash"
 
 # Extended-reasoning budgets, in tokens. Only `provider = "anthropic"` sends
 # these as a real thinking budget. Under the default OpenRouter provider they
