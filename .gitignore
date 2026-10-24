@@ -42,3 +42,6 @@ docs/REIMPL_VS_PAPER.md
 .ruff_cache/
 htmlcov/
 .coverage
+
+.standard_config
+*.sh
