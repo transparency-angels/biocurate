@@ -7,8 +7,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-TaskAgent = Literal["generation", "reflection", "ranking", "evolution", "proximity", "metareview"]
+TaskAgent = Literal[
+    "generation", "reflection", "ranking", "evolution", "proximity", "metareview", "data_analysis"
+]
 TaskAction = Literal[
+    # Data Analysis
+    "ProfileDataset",
     # Generation
     "CreateInitialHypotheses",
     "GenerateFromFeedback",
@@ -53,6 +57,7 @@ class Task(BaseModel):
 
 
 TaskResultKind = Literal[
+    "data_profiled",
     "hypothesis_created",
     "review_completed",
     "added_to_tournament",

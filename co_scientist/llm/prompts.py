@@ -23,6 +23,7 @@ TEMPLATES = {
     "parse_goal": "parse_goal.md",
     "generation.literature": "generation_literature.md",
     "generation.debate": "generation_debate.md",
+    "generation.data_driven": "generation_data_driven.md",
     "reflection.full": "reflection_review.md",
     "reflection.verification": "reflection_verification.md",
     "reflection.observation": "reflection_observation.md",

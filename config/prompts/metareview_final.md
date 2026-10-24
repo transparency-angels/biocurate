@@ -19,6 +19,14 @@ Your job is to produce a coherent research overview that the scientist can act o
 # Executive summary
 (3-5 sentences: what the tournament converged on and why it matters.)
 
+# Top Ranked Hypotheses & Translational Impact
+Explicitly detail the top three (3) most promising hypotheses (ranked by tournament Elo, scientific significance, and potential translational impact):
+For each hypothesis:
+- **Hypothesis ID & Title:** `[H-...]`
+- **Biomarker & Drug Relationship:** Observed clinical relationship and empirical dataset support.
+- **Mechanistic Explanation:** Biological pathway and molecular rationale explaining the relationship.
+- **Scientific Significance & Translational Impact:** Clinical utility, druggability/actionability, and therapeutic implications.
+
 # Main research directions
 For each direction, write a short section with:
 - **The direction.** A name and a one-sentence claim.

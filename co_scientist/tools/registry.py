@@ -47,6 +47,10 @@ AGENT_TOOLS: dict[str, set[str]] = {
     },
     "proximity": set(),
     "metareview": set(),
+    "data_analysis": {
+        "file_*",
+        "web_search", "web_fetch",
+    },
 }
 
 

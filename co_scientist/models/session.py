@@ -22,6 +22,8 @@ class ResearchPlan(BaseModel):
     idea_attributes: list[str] = Field(default_factory=list)
     domain_hint: str | None = None         # e.g. "biology", "chemistry"; informational only
     notes: str | None = None
+    has_dataset: bool = False
+    data_sources: list[str] = Field(default_factory=list)
 
 
 class Session(BaseModel):

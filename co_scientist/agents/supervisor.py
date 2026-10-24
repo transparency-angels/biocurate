@@ -20,6 +20,7 @@ import asyncio
 import json
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import aiosqlite
@@ -108,15 +109,33 @@ class Supervisor:
                 session = await sess_repo.fetch(conn, session.id)
                 assert session is not None
 
-                for i in range(n_initial):
+                if plan.has_dataset or _detect_data_presence(goal, self.cfg.storage.data_dir):
+                    data_dir = self.cfg.storage.data_dir
+                    if plan.data_sources:
+                        p = Path(plan.data_sources[0])
+                        if p.is_file():
+                            data_dir = str(p.parent)
+                        elif p.is_dir():
+                            data_dir = str(p)
+                    log.info("bootstrap_data_analysis", session_id=session.id, data_dir=data_dir)
                     await task_repo.enqueue(conn, Task(
                         id=ids.task_id(), session_id=session.id,
                         created_at=datetime.now(UTC),
-                        agent="generation", action="CreateInitialHypotheses",
-                        payload={"strategy": "literature", "n": 1},
-                        priority=100, status="pending",
-                        idempotency_key=f"{session.id}::generation::initial::{i}",
+                        agent="data_analysis", action="ProfileDataset",
+                        payload={"data_dir": data_dir},
+                        priority=200, status="pending",
+                        idempotency_key=f"{session.id}::data_analysis::initial",
                     ))
+                else:
+                    for i in range(n_initial):
+                        await task_repo.enqueue(conn, Task(
+                            id=ids.task_id(), session_id=session.id,
+                            created_at=datetime.now(UTC),
+                            agent="generation", action="CreateInitialHypotheses",
+                            payload={"strategy": "literature", "n": 1},
+                            priority=100, status="pending",
+                            idempotency_key=f"{session.id}::generation::initial::{i}",
+                        ))
             else:
                 session = await sess_repo.fetch(conn, resume_session_id)
                 if session is None:
@@ -216,7 +235,13 @@ class Supervisor:
                     break
         if record is None:
             log.warning("parse_goal_no_record", note="falling back to bare ResearchPlan")
-            return ResearchPlan(objective=goal.strip(), preferences=[], idea_attributes=[])
+            has_data = _detect_data_presence(goal, self.cfg.storage.data_dir)
+            return ResearchPlan(
+                objective=goal.strip(), preferences=[], idea_attributes=[], has_dataset=has_data
+            )
+        has_dataset = bool(record.get("has_dataset", False))
+        if not has_dataset:
+            has_dataset = _detect_data_presence(goal, self.cfg.storage.data_dir)
         return ResearchPlan(
             objective=record.get("objective", goal.strip()),
             preferences=record.get("preferences", []),
@@ -224,6 +249,8 @@ class Supervisor:
             idea_attributes=record.get("idea_attributes", []),
             domain_hint=record.get("domain_hint") or None,
             notes=record.get("notes") or None,
+            has_dataset=has_dataset,
+            data_sources=record.get("data_sources", []),
         )
 
     async def _apply_plan(
@@ -366,7 +393,26 @@ class Supervisor:
         task: Task,
         result,
     ) -> None:
-        if result.kind == "hypothesis_created":
+        if result.kind == "data_profiled":
+            candidates = result.extra.get("candidates", [])
+            summary = result.extra.get("summary", "")
+            n_gen = max(3, min(len(candidates), 5)) if candidates else 3
+            for i in range(n_gen):
+                cand = candidates[i] if i < len(candidates) else (candidates[0] if candidates else None)
+                await task_repo.enqueue(conn, Task(
+                    id=ids.task_id(), session_id=session.id,
+                    created_at=datetime.now(UTC),
+                    agent="generation", action="CreateInitialHypotheses",
+                    payload={
+                        "strategy": "data_driven",
+                        "n": 1,
+                        "candidate": cand,
+                        "dataset_summary": summary,
+                    },
+                    priority=100, status="pending",
+                    idempotency_key=f"{session.id}::generation::data_driven::{i}",
+                ))
+        elif result.kind == "hypothesis_created":
             for hid in result.hypothesis_ids:
                 await task_repo.enqueue(conn, Task(
                     id=ids.task_id(), session_id=session.id,
@@ -582,6 +628,12 @@ class Supervisor:
             "reflection": ReflectionAgent(deps),
             "ranking": RankingAgent(deps),
         }
+        try:
+            from .data_analysis import DataAnalysisAgent
+
+            out["data_analysis"] = DataAnalysisAgent(deps)
+        except ImportError:
+            pass
         # Evolution / Proximity / Meta-review register if importable.
         try:
             from .evolution import EvolutionAgent
@@ -629,3 +681,17 @@ def _human_preference(session_id: str, text: str):
         source="human", kind="preference",
         target_id=None, text=text, active=True,
     )
+
+
+def _detect_data_presence(goal: str, data_dir_str: str) -> bool:
+    goal_lower = goal.lower()
+    keywords = ["dataset", "attached", "metadata", "biomarker", "patient_metadata", "treatment response", "study metadata"]
+    if any(k in goal_lower for k in keywords):
+        return True
+    p = Path(data_dir_str)
+    if p.is_dir():
+        for name in ("patient_metadata.txt", "cell2mutation_labeled.txt", "pfs_months.txt"):
+            if (p / name).is_file():
+                return True
+    return False
+

@@ -45,8 +45,8 @@ class GenerationAgent(BaseAgent):
             raise RuntimeError(f"session {task.session_id} missing")
         plan = session.research_plan
 
-        if strategy != "literature":
-            # M3 ships only the literature strategy.
+        if strategy not in ("literature", "data_driven"):
+            # M3 ships literature and data_driven strategies.
             raise NotImplementedError(f"strategy {strategy!r} lands in a later milestone")
 
         # 1. Render the prompt and run the tool loop with `record_hypothesis` available.
@@ -67,20 +67,38 @@ class GenerationAgent(BaseAgent):
             "empty searches is far better than running out of turns with nothing."
         )
 
-        prompt = render(
-            "generation.literature",
-            goal=plan.objective,
-            preferences="; ".join(plan.preferences),
-            articles_with_reasoning=articles_block,
-            instructions=(
-                "Propose ONE hypothesis (the strongest you can justify) and "
-                "register it via the record_hypothesis tool. Do not propose more "
-                "than one — additional hypotheses come from separate Generation calls. "
-                "You MUST end this task by calling record_hypothesis; do not keep "
-                "searching indefinitely. Budget your literature search to a handful "
-                "of queries, then commit."
-            ),
-        )
+        candidate = task.payload.get("candidate")
+        dataset_summary = task.payload.get("dataset_summary", "")
+
+        if strategy == "data_driven":
+            prompt = render(
+                "generation.data_driven",
+                goal=plan.objective,
+                preferences="; ".join(plan.preferences),
+                candidate=candidate,
+                dataset_summary=dataset_summary,
+                articles_with_reasoning=articles_block,
+                instructions=(
+                    "Propose ONE mechanistic hypothesis explaining the biological relationship between "
+                    "the empirical biomarker and treatment response. Register it via the record_hypothesis "
+                    "tool with strategy set to 'data_driven'. You MUST end this task by calling record_hypothesis."
+                ),
+            )
+        else:
+            prompt = render(
+                "generation.literature",
+                goal=plan.objective,
+                preferences="; ".join(plan.preferences),
+                articles_with_reasoning=articles_block,
+                instructions=(
+                    "Propose ONE hypothesis (the strongest you can justify) and "
+                    "register it via the record_hypothesis tool. Do not propose more "
+                    "than one — additional hypotheses come from separate Generation calls. "
+                    "You MUST end this task by calling record_hypothesis; do not keep "
+                    "searching indefinitely. Budget your literature search to a handful "
+                    "of queries, then commit."
+                ),
+            )
         _ = n_target  # n_target controls how many parallel Generation tasks are enqueued, not per-call output
 
         sys_blocks = [
@@ -93,7 +111,7 @@ class GenerationAgent(BaseAgent):
         ]
         user_blocks = [CachedBlock(prompt, cache=False)]
 
-        r = route(self.deps.cfg, "generation", "literature")
+        r = route(self.deps.cfg, "generation", strategy)
         tools = [*self.deps.tools.anthropic_tools_for("generation"), RECORD_HYPOTHESIS_TOOL]
 
         spec = AgentCallSpec(
@@ -110,7 +128,7 @@ class GenerationAgent(BaseAgent):
         )
         ctx = CallContext(
             session_id=task.session_id, task_id=task.id,
-            agent="generation", action="CreateInitialHypotheses", mode="literature",
+            agent="generation", action="CreateInitialHypotheses", mode=strategy,
         )
 
         try:
@@ -133,9 +151,11 @@ class GenerationAgent(BaseAgent):
 
         # 3. Validate every citation URL is in the union of URLs seen during the loop.
         record["citations"] = _filter_to_seen_urls(record.get("citations", []), loop_result.seen_urls)
+        if strategy == "data_driven" and candidate and not record.get("data_evidence"):
+            record["data_evidence"] = candidate
 
         # 4. Persist + embed + dedup-check.
-        hid, was_new = await self._persist(session.id, record, strategy="literature")
+        hid, was_new = await self._persist(session.id, record, strategy=strategy)
         return TaskResult(
             kind="hypothesis_created",
             hypothesis_ids=[hid] if was_new else [],
@@ -197,6 +217,7 @@ class GenerationAgent(BaseAgent):
             summary=(record.get("statement") or "")[:1000],
             full_text=full_text,
             citations=citations,
+            data_evidence=record.get("data_evidence"),
             artifact_path=artifact_path,
             state="draft",
         )
@@ -277,6 +298,16 @@ def _render_hypothesis_md(record: dict[str, Any]) -> str:
     if record.get("title"):
         parts.append(f"# {record['title']}")
     parts.append(f"**Hypothesis.** {record.get('statement', '')}")
+    if record.get("data_evidence"):
+        de = record["data_evidence"]
+        parts.append(
+            f"## Empirical Data Evidence\n"
+            f"- **Biomarker:** {de.get('biomarker', 'N/A')} ({de.get('alteration_type', 'alteration')})\n"
+            f"- **Treatment:** {de.get('drug', 'N/A')}\n"
+            f"- **Observed Effect:** {de.get('relationship', 'associated')} "
+            f"(Δ OS: {de.get('delta_os_months', 'N/A')} mo, p = {de.get('p_value', 'N/A')})\n"
+            f"- **Cohort Sample Support:** {de.get('altered_samples', 'N/A')} altered / {de.get('sample_size', 'N/A')} total"
+        )
     if record.get("mechanism"):
         parts.append(f"## Mechanism\n{record['mechanism']}")
     if record.get("entities"):
