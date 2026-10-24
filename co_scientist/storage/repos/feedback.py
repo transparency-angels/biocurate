@@ -80,3 +80,13 @@ def _row_to_fb(row: aiosqlite.Row) -> SystemFeedback:
         artifact_path=row["artifact_path"],
         active=bool(row["active"]),
     )
+
+
+async def count_meta_review(conn: aiosqlite.Connection, session_id: str) -> int:
+    async with conn.execute(
+        """SELECT COUNT(*) AS n FROM system_feedback
+              WHERE session_id=? AND kind='system_feedback' AND source='meta_review'""",
+        (session_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return row["n"] if row else 0

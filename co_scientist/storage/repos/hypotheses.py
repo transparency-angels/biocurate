@@ -96,6 +96,50 @@ async def top_by_elo(
     return [_row_to_hyp(r) for r in rows]
 
 
+async def count_by_state(conn: aiosqlite.Connection, session_id: str) -> dict[str, int]:
+    async with conn.execute(
+        "SELECT state AS k, COUNT(*) AS n FROM hypotheses WHERE session_id=? GROUP BY state",
+        (session_id,),
+    ) as cur:
+        return {r["k"]: r["n"] for r in await cur.fetchall()}
+
+
+async def elo_range(
+    conn: aiosqlite.Connection, session_id: str
+) -> tuple[float | None, float | None, int]:
+    """(min elo, max elo, number of hypotheses with an elo)."""
+    async with conn.execute(
+        """SELECT MIN(elo) AS lo, MAX(elo) AS hi, COUNT(elo) AS n
+             FROM hypotheses WHERE session_id=? AND elo IS NOT NULL""",
+        (session_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return (row["lo"], row["hi"], row["n"]) if row else (None, None, 0)
+
+
+async def top_elo_ids(
+    conn: aiosqlite.Connection, session_id: str, k: int
+) -> list[tuple[str, float]]:
+    async with conn.execute(
+        """SELECT id, elo FROM hypotheses
+              WHERE session_id=? AND state IN ('in_tournament','pinned')
+                AND elo IS NOT NULL
+              ORDER BY elo DESC LIMIT ?""",
+        (session_id, k),
+    ) as cur:
+        return [(r["id"], r["elo"]) for r in await cur.fetchall()]
+
+
+async def pool_size(conn: aiosqlite.Connection, session_id: str) -> int:
+    async with conn.execute(
+        """SELECT COUNT(*) AS n FROM hypotheses
+              WHERE session_id=? AND state IN ('in_tournament','pinned')""",
+        (session_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return row["n"] if row else 0
+
+
 async def set_state(conn: aiosqlite.Connection, hypothesis_id: str, state: str) -> None:
     await conn.execute(
         "UPDATE hypotheses SET state=? WHERE id=?",

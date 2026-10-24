@@ -78,6 +78,47 @@ async def set_final_overview(conn: aiosqlite.Connection, session_id: str, rel_pa
     await conn.commit()
 
 
+async def list_with_stats(
+    conn: aiosqlite.Connection, *, limit: int | None = None
+) -> list[dict]:
+    """Sessions newest-updated first, with hypothesis count and best Elo."""
+    sql = """SELECT id, status, research_goal, created_at, updated_at,
+                    budget_usd, budget_used_usd,
+                    (SELECT COUNT(*) FROM hypotheses WHERE session_id = s.id) AS n_hyps,
+                    (SELECT MAX(elo) FROM hypotheses WHERE session_id = s.id) AS top_elo
+               FROM sessions s
+               ORDER BY updated_at DESC"""
+    args: tuple = ()
+    if limit is not None:
+        sql += " LIMIT ?"
+        args = (limit,)
+    async with conn.execute(sql, args) as cur:
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def ids_created_since(conn: aiosqlite.Connection, iso_ts: str) -> list[str]:
+    async with conn.execute("SELECT id FROM sessions WHERE created_at >= ?", (iso_ts,)) as cur:
+        return [r["id"] for r in await cur.fetchall()]
+
+
+async def ids_for_goal(conn: aiosqlite.Connection, goal: str) -> list[str]:
+    """Session ids with exactly this research goal, newest first."""
+    async with conn.execute(
+        "SELECT id FROM sessions WHERE research_goal = ? ORDER BY created_at DESC",
+        (goal,),
+    ) as cur:
+        return [r["id"] for r in await cur.fetchall()]
+
+
+async def set_research_plan(conn: aiosqlite.Connection, session_id: str, plan: dict) -> None:
+    await conn.execute(
+        "UPDATE sessions SET research_plan=?, updated_at=? WHERE id=?",
+        (json.dumps(plan), _now(), session_id),
+    )
+    await conn.commit()
+
+
 def _row_to_session(row: aiosqlite.Row) -> Session:
     return Session(
         id=row["id"],

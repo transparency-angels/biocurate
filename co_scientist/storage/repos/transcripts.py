@@ -37,3 +37,13 @@ async def usage_summary(conn: aiosqlite.Connection, session_id: str) -> dict[str
     ) as cur:
         row = await cur.fetchone()
     return dict(row) if row else {}
+
+
+async def durations_ms(conn: aiosqlite.Connection, session_id: str) -> list[float]:
+    """Per-call latency in ms, ascending (rough: whole-second resolution)."""
+    async with conn.execute(
+        """SELECT (strftime('%s', finished_at) - strftime('%s', started_at)) * 1000 AS dur_ms
+              FROM transcripts WHERE session_id=? ORDER BY dur_ms""",
+        (session_id,),
+    ) as cur:
+        return [r["dur_ms"] for r in await cur.fetchall() if r["dur_ms"] is not None]

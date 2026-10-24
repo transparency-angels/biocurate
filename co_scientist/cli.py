@@ -7,7 +7,6 @@ land in M3+. All commands resolve config the same way; secrets come from env.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import os
 from datetime import UTC, datetime
@@ -20,6 +19,9 @@ from rich.table import Table
 from .config import load_config
 from .logging import get_logger, setup_logging
 from .storage import db as db_mod
+from .storage.repos import hypotheses as hyp_repo
+from .storage.repos import sessions as sess_repo
+from .storage.repos import tasks as task_repo
 
 VERSION = "0.1.0"
 
@@ -162,7 +164,6 @@ def doctor(ctx: typer.Context) -> None:
 
 def _check_mcp() -> tuple[bool, str]:
     """Run an initialize + tools/list handshake against our own MCP server."""
-    import json
     import subprocess
     import sys
     import tempfile
@@ -256,16 +257,7 @@ def list_sessions(ctx: typer.Context) -> None:
     async def _run() -> list[dict]:
         conn = await db_mod.connect(cfg)
         try:
-            async with conn.execute(
-                """SELECT id, status, research_goal, created_at, updated_at,
-                          budget_usd, budget_used_usd,
-                          (SELECT COUNT(*) FROM hypotheses WHERE session_id = s.id) AS n_hyps,
-                          (SELECT MAX(elo) FROM hypotheses WHERE session_id = s.id) AS top_elo
-                     FROM sessions s
-                     ORDER BY updated_at DESC"""
-            ) as cur:
-                rows = await cur.fetchall()
-            return [dict(r) for r in rows]
+            return await sess_repo.list_with_stats(conn)
         finally:
             await conn.close()
 
@@ -303,26 +295,12 @@ def status(ctx: typer.Context, session_id: str = typer.Argument(...)) -> None:
     async def _run() -> dict:
         conn = await db_mod.connect(cfg)
         try:
-            async with conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)) as cur:
-                row = await cur.fetchone()
-            if row is None:
+            session = await sess_repo.fetch(conn, session_id)
+            if session is None:
                 return {}
-            out = dict(row)
-            for col in ("research_plan", "config_snapshot"):
-                with contextlib.suppress(Exception):
-                    out[col] = json.loads(out[col])
-            async with conn.execute(
-                """SELECT status, COUNT(*) AS n FROM tasks
-                       WHERE session_id = ? GROUP BY status""",
-                (session_id,),
-            ) as cur:
-                out["task_counts"] = {r["status"]: r["n"] for r in await cur.fetchall()}
-            async with conn.execute(
-                """SELECT state, COUNT(*) AS n FROM hypotheses
-                       WHERE session_id = ? GROUP BY state""",
-                (session_id,),
-            ) as cur:
-                out["hypothesis_states"] = {r["state"]: r["n"] for r in await cur.fetchall()}
+            out = session.model_dump(mode="json")
+            out["task_counts"] = await task_repo.count_by_status(conn, session_id)
+            out["hypothesis_states"] = await hyp_repo.count_by_state(conn, session_id)
             return out
         finally:
             await conn.close()
@@ -493,13 +471,10 @@ def report(
     async def _path() -> Path | None:
         conn = await db_mod.connect(cfg)
         try:
-            async with conn.execute(
-                "SELECT final_overview FROM sessions WHERE id = ?", (session_id,)
-            ) as cur:
-                row = await cur.fetchone()
-            if not row or not row["final_overview"]:
+            session = await sess_repo.fetch(conn, session_id)
+            if session is None or not session.final_overview:
                 return None
-            return cfg.data_dir / row["final_overview"]
+            return cfg.data_dir / session.final_overview
         finally:
             await conn.close()
 

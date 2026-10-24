@@ -229,11 +229,7 @@ class Supervisor:
     async def _apply_plan(
         self, conn: aiosqlite.Connection, session: Session, plan: ResearchPlan
     ) -> None:
-        await conn.execute(
-            "UPDATE sessions SET research_plan=?, updated_at=? WHERE id=?",
-            (plan.model_dump_json(), datetime.now(UTC).isoformat(), session.id),
-        )
-        await conn.commit()
+        await sess_repo.set_research_plan(conn, session.id, plan.model_dump(mode="json"))
 
     # ----------------------------- main loop ----------------------------- #
 
@@ -467,13 +463,7 @@ class Supervisor:
 
         # Periodic meta-review (every ~5 minutes wall, approximated by match count).
         mc = await tourney_repo.count_matches(conn, session.id)
-        async with conn.execute(
-            """SELECT COUNT(*) AS n FROM system_feedback
-                  WHERE session_id=? AND kind='system_feedback' AND source='meta_review'""",
-            (session.id,),
-        ) as cur:
-            row = await cur.fetchone()
-        feedback_count = row["n"] if row else 0
+        feedback_count = await fb_repo.count_meta_review(conn, session.id)
         if mc >= (feedback_count + 1) * 50:
             await task_repo.enqueue(conn, Task(
                 id=ids.task_id(), session_id=session.id,

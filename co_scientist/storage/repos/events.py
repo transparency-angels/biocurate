@@ -56,3 +56,18 @@ async def recent(
             }
         )
     return out
+
+
+async def tool_call_counts(conn: aiosqlite.Connection, session_id: str) -> tuple[int, int]:
+    """(tool_call events, those whose payload has is_error true)."""
+    async with conn.execute(
+        """SELECT
+              SUM(CASE WHEN event='tool_call' THEN 1 ELSE 0 END) AS tools_called,
+              SUM(CASE WHEN event='tool_call' AND payload LIKE '%"is_error": true%' THEN 1 ELSE 0 END) AS tool_errors
+           FROM events WHERE session_id=?""",
+        (session_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    if row is None:
+        return (0, 0)
+    return (row["tools_called"] or 0, row["tool_errors"] or 0)

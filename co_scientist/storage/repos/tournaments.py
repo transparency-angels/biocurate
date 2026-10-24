@@ -112,6 +112,42 @@ async def recent_rationales(
     return [r["rationale"] for r in rows]
 
 
+async def list_for_session(
+    conn: aiosqlite.Connection, session_id: str, *, limit: int
+) -> list[TournamentMatch]:
+    """Most recent matches first."""
+    async with conn.execute(
+        """SELECT * FROM tournament_matches
+             WHERE session_id=?
+             ORDER BY created_at DESC LIMIT ?""",
+        (session_id, limit),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [_row_to_match(r) for r in rows]
+
+
+async def list_for_hypothesis(
+    conn: aiosqlite.Connection, hypothesis_id: str
+) -> list[TournamentMatch]:
+    """Every match the hypothesis played, oldest first."""
+    async with conn.execute(
+        """SELECT * FROM tournament_matches
+            WHERE hyp_a=? OR hyp_b=?
+            ORDER BY created_at""",
+        (hypothesis_id, hypothesis_id),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [_row_to_match(r) for r in rows]
+
+
+async def count_by_mode(conn: aiosqlite.Connection, session_id: str) -> dict[str, int]:
+    async with conn.execute(
+        "SELECT mode AS k, COUNT(*) AS n FROM tournament_matches WHERE session_id=? GROUP BY mode",
+        (session_id,),
+    ) as cur:
+        return {r["k"]: r["n"] for r in await cur.fetchall()}
+
+
 def _row_to_match(row: aiosqlite.Row) -> TournamentMatch:
     return TournamentMatch(
         id=row["id"],
