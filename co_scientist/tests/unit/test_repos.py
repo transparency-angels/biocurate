@@ -1190,3 +1190,68 @@ async def test_attachment_set_status_and_older_than(any_conn):
     assert (m.status, m.error) == ("ingested", None)
     old = await repo.older_than(any_conn, t - timedelta(days=1))
     assert [x.id for x in old] == ["old"]
+
+
+def _report(**over) -> dict:
+    return {
+        "summary_markdown": "# Summary", "tests": [{"biomarker": "TP53", "p_value": 0.01}],
+        "methods": {"alpha": 0.05}, "candidates": [{"candidate_key": "TP53|mutation|CIS"}],
+        "selection": {"eligible_tests": 1}, "sample_count": 40, "drugs": ["CIS"],
+        "plots": [{"name": "km_1.png", "blob_id": "blob_1", "content_type": "image/png"}],
+        **over,
+    }
+
+
+@pytest.mark.asyncio
+async def test_analysis_report_roundtrip(any_conn) -> None:
+    from co_scientist.storage.repos import analysis as repo
+
+    assert await repo.fetch_report(any_conn, "ses_an") is None
+    await repo.save_report(any_conn, "ses_an", _report())
+    got = await repo.fetch_report(any_conn, "ses_an")
+    assert got is not None
+    for key, value in _report().items():
+        assert got[key] == value
+    assert got["created_at"].tzinfo is not None
+    await repo.save_report(any_conn, "ses_an", _report(sample_count=41))  # upsert
+    assert (await repo.fetch_report(any_conn, "ses_an"))["sample_count"] == 41
+
+
+@pytest.mark.asyncio
+async def test_fetch_points_returns_only_requested_keys(any_conn) -> None:
+    from co_scientist.storage.repos import analysis as repo
+
+    pts = [{"sample_id": "S1", "group": "altered", "value": 1.5}]
+    for key in ("A|mutation|D", "B|mutation|D", "C|deletion|D"):
+        await repo.save_points(any_conn, "ses_an", key, metric="OS", unit="months", points=pts)
+    await repo.save_points(any_conn, "ses_other", "A|mutation|D", metric="OS", unit="months",
+                           points=[])
+    await repo.save_points(  # upsert
+        any_conn, "ses_an", "A|mutation|D", metric="PFS", unit="months", points=pts * 2)
+    got = await repo.fetch_points(any_conn, "ses_an", ["A|mutation|D", "C|deletion|D", "Z|x|y"])
+    assert set(got) == {"A|mutation|D", "C|deletion|D"}
+    assert got["A|mutation|D"] == {"metric": "PFS", "unit": "months", "points": pts * 2}
+    assert await repo.fetch_points(any_conn, "ses_an", []) == {}
+
+
+@pytest.mark.asyncio
+async def test_points_doc_size_for_24k_samples(any_conn) -> None:
+    from co_scientist.storage.atlas.client import AtlasConn
+    from co_scientist.storage.repos import analysis as repo
+
+    pts = [
+        {"sample_id": f"TCGA-{i:06d}-01", "group": "altered" if i % 2 else "unaltered",
+         "value": i / 7}
+        for i in range(24_000)
+    ]
+    key = "TP53|mutation|CISPLATIN"
+    await repo.save_points(any_conn, "ses_big", key, metric="OS", unit="months", points=pts)
+    got = await repo.fetch_points(any_conn, "ses_big", [key])
+    assert got[key]["points"] == pts
+    if isinstance(any_conn, AtlasConn):
+        import bson
+
+        doc = await any_conn.coll("analysis_points").find_one({"session_id": "ses_big"})
+        size = len(bson.encode(doc))
+        print(f"BSON size of 24k-point doc: {size}")
+        assert size < 16 * 1024 * 1024

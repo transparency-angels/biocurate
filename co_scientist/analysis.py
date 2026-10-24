@@ -78,6 +78,7 @@ class DatasetProfiler:
         self.top_curves: dict[str, dict[str, Any]] = {}
         self.data_handling: dict[str, Any] = {}
         self.endpoint: dict[str, str] = {}
+        self.points: dict[str, list[dict[str, Any]]] = {}
 
     def profile(
         self, data_dir: Path, *, goal: str = "", target_drugs: list[str] | None = None,
@@ -88,6 +89,7 @@ class DatasetProfiler:
         self.tests = []
         self.matrix_paths = {}
         self.top_curves = {}
+        self.points = {}
         self.data_handling = {"matrix_screens": {}}
         metadata_path = self._find_metadata_file(data_dir)
         if metadata_path is None:
@@ -114,6 +116,7 @@ class DatasetProfiler:
             curve["path"] = f"plots/kaplan_meier_{rank}.png"
         report = {
             "candidates": candidates,
+            "points": {c["candidate_key"]: self.points[c["candidate_key"]] for c in candidates},
             "drugs": selected_drugs,
             "sample_count": len(samples),
             "generated_at": datetime.now(UTC).isoformat(),
@@ -266,6 +269,7 @@ class DatasetProfiler:
             genes = [column.strip() for column in header[1:]]
             durations = [[[], []] for _ in genes]
             events = [[[], []] for _ in genes]
+            sample_ids = [[[], []] for _ in genes]
             seen = set()
             for row in reader:
                 if not row or row[0].strip() not in target:
@@ -288,8 +292,11 @@ class DatasetProfiler:
                         continue
                     durations[i][group].append(sample["os_months"])
                     events[i][group].append(sample["status"])
+                    sample_ids[i][group].append(sid)
         candidates = []
-        for gene, (altered_t, unaltered_t), (altered_e, unaltered_e) in zip(genes, durations, events, strict=True):
+        for gene, (altered_t, unaltered_t), (altered_e, unaltered_e), (
+            altered_s, unaltered_s,
+        ) in zip(genes, durations, events, sample_ids, strict=True):
             if not gene or min(len(altered_t), len(unaltered_t)) < MIN_GROUP:
                 continue
             result = logrank_test(altered_t, unaltered_t, event_observed_A=altered_e, event_observed_B=unaltered_e)
@@ -317,10 +324,18 @@ class DatasetProfiler:
                 "unaltered_censored": len(unaltered_e) - sum(unaltered_e),
                 "nominally_significant": bool(np.isfinite(p_value) and p_value <= ALPHA),
                 "matrix_file": str(matrix_path), "cohort": f"Clinical cohort ({drug})",
+                "candidate_key": f"{gene}|{alteration}|{drug}",
             }
             self.tests.append(test)
             if test["nominally_significant"]:
                 candidates.append(test)
+                self.points[test["candidate_key"]] = [
+                    {"sample_id": sid, "group": name, "value": value}
+                    for name, ids, values in (
+                        ("altered", altered_s, altered_t), ("unaltered", unaltered_s, unaltered_t),
+                    )
+                    for sid, value in zip(ids, values, strict=True)
+                ]
                 existing = self.top_curves.get(gene)
                 if existing is None or p_value < existing["association"]["p_value"]:
                     self.top_curves[gene] = {"association": test, "altered": _curve_data(altered_km), "unaltered": _curve_data(unaltered_km)}

@@ -147,6 +147,11 @@ BTREE_INDEXES: dict[str, list[IndexModel]] = {
     "timeline": [
         IndexModel([("session_id", _A), ("seq", _A)], name="timeline_sess_seq", unique=True)
     ],
+    "analysis_points": [
+        IndexModel(
+            [("session_id", _A), ("candidate_key", _A)], name="analysis_pts_key", unique=True
+        )
+    ],
 }
 
 

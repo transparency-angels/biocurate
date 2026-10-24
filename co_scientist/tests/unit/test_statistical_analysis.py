@@ -194,3 +194,21 @@ def test_standalone_validator_exit_status_and_plot_artifacts(cohort: Path, monke
 def test_unknown_treatment_is_an_error(cohort: Path) -> None:
     with pytest.raises(ValueError, match="Treatments not found"):
         profile_dataset(cohort, target_drugs=["NOT_A_DRUG"])
+
+
+def test_profile_returns_points_for_significant_candidates_only(cohort: Path) -> None:
+    report = profile_dataset(cohort, target_drugs=["DRUG_A"])
+    candidates = report["candidates"]
+    assert {c["biomarker"] for c in candidates} == {"DURATION", "EVENT_ONLY"}
+    candidate = next(c for c in candidates if c["biomarker"] == "DURATION")
+    assert candidate["candidate_key"] == "DURATION|mutation|DRUG_A"
+    assert all("points" not in c for c in candidates)
+    # UNDERPOWERED is never tested, so it has no points either.
+    assert set(report["points"]) == {c["candidate_key"] for c in candidates}
+    assert "UNDERPOWERED|mutation|DRUG_A" not in report["points"]
+    points = report["points"][candidate["candidate_key"]]
+    assert {p["group"] for p in points} == {"altered", "unaltered"}
+    assert sum(p["group"] == "altered" for p in points) == candidate["altered_samples"]
+    assert sum(p["group"] == "unaltered" for p in points) == candidate["unaltered_samples"]
+    assert {p["sample_id"]: p["value"] for p in points}["S0"] == 1
+    assert all(set(p) == {"sample_id", "group", "value"} for p in points)
