@@ -334,6 +334,9 @@ def run(
     concurrency: int | None = typer.Option(
         None, "--concurrency", help="Override worker concurrency."
     ),
+    attach: list[Path] | None = typer.Option(
+        None, "--attach", help="Attach a file or .zip (repeatable).",
+    ),
 ) -> None:
     """Start a fresh research session. Generation → Reflection → Ranking tournament → Meta-review."""
     cfg, _ = ctx.obj
@@ -359,12 +362,26 @@ def run(
 
     prefs = preferences_file.read_text(encoding="utf-8") if preferences_file else None
     from .agents.supervisor import Supervisor
+    from .attachments.intake import IntakeError, accept_uploads
+
+    incoming = None
+    try:
+        if attach:
+            uploads = [(p.name, p.read_bytes(), "") for p in attach]
+            incoming = accept_uploads(uploads, cfg.attachments).files
+    except (IntakeError, OSError) as exc:
+        console.print(f"[red]Cannot attach files: {exc}[/red]")
+        raise typer.Exit(2) from exc
 
     sup = Supervisor(cfg)
-    session_id = asyncio.run(
-        sup.run_session(goal, preferences_text=prefs, n_initial=n_initial,
-                        wall_clock_seconds=wall_clock)
-    )
+    try:
+        session_id = asyncio.run(
+            sup.run_session(goal, preferences_text=prefs, n_initial=n_initial,
+                            wall_clock_seconds=wall_clock, attachments=incoming)
+        )
+    except ValueError as exc:  # attachment quota exceeded
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2) from exc
     console.print(f"[green]Done.[/green] session={session_id}")
     console.print(f"View report:  co-scientist report {session_id}")
 

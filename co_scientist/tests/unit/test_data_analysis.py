@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -13,7 +13,6 @@ from co_scientist import ids
 from co_scientist.agents.base import AgentDeps
 from co_scientist.agents.data_analysis import DataAnalysisAgent
 from co_scientist.agents.generation import _render_hypothesis_md
-from co_scientist.agents.supervisor import Supervisor, _detect_data_presence
 from co_scientist.config import Config
 from co_scientist.models import ResearchPlan, Session, Task
 from co_scientist.models.attachment import AttachmentMeta
@@ -232,7 +231,6 @@ async def test_data_analysis_screening(
     suffix: str, delimiter: str, id_header: str, alteration: str,
 ) -> None:
     agent, task = dataset_agent
-    task.payload["data_dir"] = str(tmp_path)  # transitional: removed in Task 7
     # Use an arbitrary metadata filename, mixed-case headers, and BOM/quotes
     # typical of spreadsheet CSV exports. Matrices sort before the metadata.
     with (tmp_path / f"z_clinical_cohort{suffix}").open("w", encoding="utf-8-sig", newline="") as f:
@@ -247,6 +245,10 @@ async def test_data_analysis_screening(
         for i in range(30):
             writer.writerow([f"S,{i:02d}", int(i < 15), 0])
 
+    task.payload["attachment_ids"] = await _attach(
+        agent.deps.db, task.session_id,
+        {p.name: p.read_bytes() for p in tmp_path.iterdir() if p.is_file()},
+    )
     result = await agent.execute(task)
     assert result.kind == "data_profiled"
     assert result.extra["sample_count"] == 30
@@ -273,12 +275,6 @@ async def test_data_analysis_screening(
     assert not (agent.deps.cfg.session_artifact_dir(task.session_id) / "data_analysis").exists()
 
 
-@pytest.mark.parametrize("filename", ["cohort.csv", "cohort.CSV", "clinical.tsv", "patient_metadata.txt"])
-def test_detect_flat_dataset(tmp_path: Path, filename: str) -> None:
-    (tmp_path / filename).write_text("sample_id,drug,time\nS1,DRUG_A,12\n")
-    assert _detect_data_presence("Explore cancer mechanisms", str(tmp_path))
-
-
 def test_runtime_storage_is_not_a_dataset(tmp_path: Path) -> None:
     (tmp_path / "co_scientist.db").write_bytes(b"not an input table")
     (tmp_path / "index.meta.json").write_text("{}")
@@ -286,51 +282,15 @@ def test_runtime_storage_is_not_a_dataset(tmp_path: Path) -> None:
     artifacts.mkdir()
     (artifacts / "generated.csv").write_text("sample_id,drug,time\nS1,DRUG_A,12\n")
     assert tabular_files(tmp_path) == []
-    assert not _detect_data_presence("Explore cancer mechanisms", str(tmp_path))
-
-
-async def test_missing_dataset_directory_does_not_fall_back(
-    tmp_path: Path, dataset_agent: tuple[DataAnalysisAgent, Task], monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    agent, task = dataset_agent
-    # A missing explicit path must not silently load unrelated ./data files.
-    (tmp_path / "data").mkdir()
-    (tmp_path / "data" / "metadata.csv").write_text("id,drug,time\nS1,DRUG_A,12\n")
-    monkeypatch.chdir(tmp_path)
-    task.payload["data_dir"] = str(tmp_path / "missing")
-    with pytest.raises(NotADirectoryError, match="missing"):
-        await agent.execute(task)
-
-
-async def test_configured_relative_data_dir_is_independent_of_cwd(
-    tmp_path: Path, dataset_agent: tuple[DataAnalysisAgent, Task], monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    agent, task = dataset_agent
-    monkeypatch.setattr("co_scientist.config.PROJECT_ROOT", tmp_path)
-    agent.deps.cfg.storage.data_dir = "./data"
-    (tmp_path / "data").mkdir()
-    (tmp_path / "data" / "cohort.csv").write_text("id,drug,time,event\nS1,DRUG_A,12,0\n")
-    other_cwd = tmp_path / "elsewhere"
-    other_cwd.mkdir()
-    monkeypatch.chdir(other_cwd)
-
-    result = await agent.execute(task)
-    assert result.extra["sample_count"] == 1
-    # The goal parser must also discover files via the resolved config path.
-    agent.deps.llm.call = AsyncMock(return_value=MagicMock(raw=MagicMock(content=[])))
-    session = await sess_repo.fetch(agent.deps.db, task.session_id)
-    plan = await Supervisor(agent.deps.cfg)._parse_goal(
-        agent.deps, session, "Explore cancer mechanisms", None,
-    )
-    assert plan.has_dataset
 
 
 async def test_no_clinical_metadata_reports_expected_format(
     tmp_path: Path, dataset_agent: tuple[DataAnalysisAgent, Task],
 ) -> None:
     agent, task = dataset_agent
-    task.payload["data_dir"] = str(tmp_path)  # transitional: removed in Task 7
-    (tmp_path / "mutations.csv").write_text("sample_id,GENE_X\nS1,1\n")
+    task.payload["attachment_ids"] = await _attach(
+        agent.deps.db, task.session_id, {"mutations.csv": b"sample_id,GENE_X\nS1,1\n"},
+    )
     result = await agent.execute(task)
     assert result.extra["candidates"] == []
     assert "No clinical metadata table" in result.extra["summary"]

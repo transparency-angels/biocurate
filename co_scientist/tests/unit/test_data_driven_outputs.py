@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -14,6 +15,7 @@ from co_scientist.agents.base import AgentDeps
 from co_scientist.agents.data_analysis import DataAnalysisAgent
 from co_scientist.agents.generation import GenerationAgent
 from co_scientist.agents.supervisor import Supervisor
+from co_scientist.attachments.intake import IncomingFile
 from co_scientist.llm.types import SynthMessage, TextBlock, ToolUseBlock
 from co_scientist.models import Hypothesis, ResearchPlan, Session
 from co_scientist.orchestrator.termination import StopReason
@@ -32,16 +34,22 @@ async def test_data_driven_session_writes_both_reports(tmp_cfg, monkeypatch: pyt
     Only model responses, embeddings, and the worker-loop timing are replaced;
     task payloads, source hydration, database updates, and files are real.
     """
-    with (tmp_cfg.data_dir / "clinical.csv").open("w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["sample_id", "drug", "os_months", "event"])
-        for i in range(30):
-            writer.writerow([f"S{i}", "DRUG_A", 10 if i < 15 else 40, int(i < 15)])
-    with (tmp_cfg.data_dir / "mutations.csv").open("w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["sample_id", "GENE_X"])
-        for i in range(30):
-            writer.writerow([f"S{i}", int(i < 15)])
+    def table(header: list[str], rows: list[list]) -> bytes:
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(header)
+        writer.writerows(rows)
+        return buf.getvalue().encode()
+
+    clinical = table(
+        ["sample_id", "drug", "os_months", "event"],
+        [[f"S{i}", "DRUG_A", 10 if i < 15 else 40, int(i < 15)] for i in range(30)],
+    )
+    mutations = table(["sample_id", "GENE_X"], [[f"S{i}", int(i < 15)] for i in range(30)])
+    files = [
+        IncomingFile("clinical.csv", clinical, "text/csv", "tabular"),
+        IncomingFile("mutations.csv", mutations, "text/csv", "tabular"),
+    ]
 
     paper = "https://paper.example/mechanism"
     literature_overview = (
@@ -68,9 +76,14 @@ async def test_data_driven_session_writes_both_reports(tmp_cfg, monkeypatch: pyt
     monkeypatch.setattr("co_scientist.agents.generation.run_tool_loop", generation_loop)
 
     supervisor = Supervisor(tmp_cfg)
-    monkeypatch.setattr(supervisor, "_parse_goal", AsyncMock(return_value=ResearchPlan(
-        objective="Find biomarkers with mechanistic literature support", has_dataset=True,
-    )))
+
+    async def plan_from_inventory(deps, session, goal, prefs, inventory):
+        return ResearchPlan(
+            objective="Find biomarkers with mechanistic literature support", has_dataset=True,
+            data_sources=[e["id"] for e in inventory],
+        )
+
+    monkeypatch.setattr(supervisor, "_parse_goal", plan_from_inventory)
     captured = {}
 
     async def profile_and_generate(conn, deps, session, tracker):
@@ -96,7 +109,7 @@ async def test_data_driven_session_writes_both_reports(tmp_cfg, monkeypatch: pyt
         return StopReason.WALL_CLOCK
 
     monkeypatch.setattr(supervisor, "_main_loop", profile_and_generate)
-    session_id = await supervisor.run_session("Find biomarkers in the dataset")
+    session_id = await supervisor.run_session("Find biomarkers in the dataset", attachments=files)
     root = tmp_cfg.session_artifact_dir(session_id)
     assert not (root / "data_analysis").exists()
     # The meta-review writes its overview into final/synthesis.json (cite-lines);

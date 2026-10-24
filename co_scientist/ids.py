@@ -112,5 +112,9 @@ def url_hash(url: str) -> str:
     return hashlib.sha1(url.encode("utf-8")).hexdigest()
 
 
+def attachment_id() -> str:
+    return f"att_{_ulid()}"
+
+
 def blob_id() -> str:
     return f"blb_{_ulid()}"

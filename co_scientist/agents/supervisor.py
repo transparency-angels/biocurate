@@ -20,10 +20,12 @@ import asyncio
 import json
 import time
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
-from .. import ids
+from .. import ids, timeline
+from ..attachments.intake import IncomingFile
+from ..attachments.inventory import build_inventory
+from ..attachments.store import store_incoming
 from ..config import Config
 from ..llm.budgets import TokenBudget
 from ..llm.prompts import render
@@ -43,10 +45,10 @@ from ..orchestrator.termination import (
     should_stop,
     snapshot_top_k,
 )
+from ..safety.quoting import quote_untrusted
 from ..storage import Conn
 from ..storage import db as db_mod
 from ..storage.artifacts import write_text
-from ..storage.datasets import tabular_files
 from ..storage.repos import events as events_repo
 from ..storage.repos import feedback as fb_repo
 from ..storage.repos import hypotheses as hyp_repo
@@ -80,6 +82,7 @@ class Supervisor:
         n_initial: int = 3,
         wall_clock_seconds: int | None = None,
         resume_session_id: str | None = None,
+        attachments: list[IncomingFile] | None = None,
     ) -> str:
         conn = await db_mod.connect(self.cfg)
         try:
@@ -104,27 +107,33 @@ class Supervisor:
                 tools = ToolRegistry(self.cfg).discover()
                 deps = AgentDeps(cfg=self.cfg, db=conn, llm=llm, tools=tools)
 
-                plan = await self._parse_goal(deps, session, goal, preferences_text)
+                try:
+                    stored = await store_incoming(conn, self.cfg, session.id, attachments or [])
+                except ValueError:
+                    await sess_repo.set_status(conn, session.id, "failed")
+                    raise
+                if stored:
+                    await timeline.post(
+                        conn, session.id, kind="attachments_received",
+                        title="Attachments received",
+                        body="\n".join(
+                            f"{a.filename} \u00b7 {a.kind} \u00b7 {a.size}" for a in stored
+                        ),
+                    )
+                inventory = await build_inventory(conn, self.cfg, session.id)
+                plan = await self._parse_goal(deps, session, goal, preferences_text, inventory)
                 await self._apply_plan(conn, session, plan)
                 session = await sess_repo.fetch(conn, session.id)
                 assert session is not None
 
-                if plan.has_dataset or _detect_data_presence(goal, str(self.cfg.data_dir)):
-                    data_dir = str(self.cfg.data_dir)
-                    if plan.data_sources:
-                        p = Path(plan.data_sources[0]).expanduser()
-                        if not p.exists() and not p.is_absolute():
-                            p = self.cfg.data_dir / p
-                        if p.is_file():
-                            data_dir = str(p.parent)
-                        elif p.is_dir():
-                            data_dir = str(p)
-                    log.info("bootstrap_data_analysis", session_id=session.id, data_dir=data_dir)
+                if plan.has_dataset:
+                    log.info("bootstrap_data_analysis", session_id=session.id,
+                             attachments=len(plan.data_sources))
                     await task_repo.enqueue(conn, Task(
                         id=ids.task_id(), session_id=session.id,
                         created_at=datetime.now(UTC),
                         agent="data_analysis", action="ProfileDataset",
-                        payload={"data_dir": data_dir},
+                        payload={"attachment_ids": plan.data_sources},
                         priority=200, status="pending",
                         idempotency_key=f"{session.id}::data_analysis::initial",
                     ))
@@ -209,10 +218,16 @@ class Supervisor:
         session: Session,
         goal: str,
         preferences_text: str | None,
+        inventory: list[dict[str, Any]] | None = None,
     ) -> ResearchPlan:
+        inventory = inventory or []
         prompt = render(
             "parse_goal", goal=goal,
             preferences_text=preferences_text or "",
+            inventory=(
+                quote_untrusted(json.dumps(inventory, indent=1), id_="attachments")
+                if inventory else ""
+            ),
         )
         r = route(self.cfg, "parse_goal", None)
         spec = AgentCallSpec(
@@ -237,13 +252,16 @@ class Supervisor:
                     break
         if record is None:
             log.warning("parse_goal_no_record", note="falling back to bare ResearchPlan")
-            has_data = _detect_data_presence(goal, str(self.cfg.data_dir))
             return ResearchPlan(
-                objective=goal.strip(), preferences=[], idea_attributes=[], has_dataset=has_data
+                objective=goal.strip(), preferences=[], idea_attributes=[],
+                has_dataset=False, data_sources=[],
             )
-        has_dataset = bool(record.get("has_dataset", False))
-        if not has_dataset:
-            has_dataset = _detect_data_presence(goal, str(self.cfg.data_dir))
+        tabular = {e["id"] for e in inventory if e.get("kind") == "tabular"}
+        raw_sources = record.get("data_sources") or []
+        data_sources = list(dict.fromkeys(
+            s for s in raw_sources if isinstance(s, str) and s in tabular
+        ))
+        has_dataset = bool(record.get("has_dataset", False)) and bool(data_sources)
         return ResearchPlan(
             objective=record.get("objective", goal.strip()),
             preferences=record.get("preferences", []),
@@ -252,7 +270,7 @@ class Supervisor:
             domain_hint=record.get("domain_hint") or None,
             notes=record.get("notes") or None,
             has_dataset=has_dataset,
-            data_sources=record.get("data_sources", []),
+            data_sources=data_sources if has_dataset else [],
         )
 
     async def _apply_plan(
@@ -686,12 +704,3 @@ def _human_preference(session_id: str, text: str):
         source="human", kind="preference",
         target_id=None, text=text, active=True,
     )
-
-
-def _detect_data_presence(goal: str, data_dir_str: str) -> bool:
-    goal_lower = goal.lower()
-    keywords = ["dataset", "attached", "metadata", "biomarker", "patient_metadata", "treatment response", "study metadata"]
-    if any(k in goal_lower for k in keywords):
-        return True
-    return bool(tabular_files(Path(data_dir_str).expanduser()))
-

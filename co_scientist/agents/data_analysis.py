@@ -49,21 +49,14 @@ class DataAnalysisAgent(BaseAgent):
             raise RuntimeError(f"session {task.session_id} missing")
         target_drug = task.payload.get("target_drug")
         drugs = [target_drug] if target_drug else None
-        attachment_ids: list[str] = []
-        if "attachment_ids" in task.payload:
-            attachment_ids = [str(a) for a in task.payload["attachment_ids"]]
-            log.info(
-                "profiling_dataset_started", session_id=session.id,
-                attachments=len(attachment_ids),
-            )
-            with tempfile.TemporaryDirectory() as tmp:
-                selected = await self._materialise(session.id, attachment_ids, Path(tmp))
-                attachment_ids = [a for a in attachment_ids if a in selected]
-                report = await self._profile(session, Path(tmp), drugs, attachment_ids)
-        else:  # transitional: removed in Task 7
-            data_dir = Path(task.payload.get("data_dir") or self.deps.cfg.data_dir)
-            log.info("profiling_dataset_started", session_id=session.id, data_dir=str(data_dir))
-            report = await self._profile(session, data_dir, drugs, [])
+        attachment_ids = [str(a) for a in task.payload.get("attachment_ids", [])]
+        log.info(
+            "profiling_dataset_started", session_id=session.id, attachments=len(attachment_ids),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            selected = await self._materialise(session.id, attachment_ids, Path(tmp))
+            attachment_ids = [a for a in attachment_ids if a in selected]
+            report = await self._profile(session, Path(tmp), drugs, attachment_ids)
         if isinstance(report, TaskResult):
             return report
         return await self._store(session.id, report, attachment_ids)
