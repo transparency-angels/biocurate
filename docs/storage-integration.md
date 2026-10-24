@@ -409,7 +409,7 @@ Fixes landed between the runs:
 
 Still not seen in a real run:
 - **Elo transaction:** it has only been verified by the live-Atlas tests (idempotency, rollback, transient retry). To exercise it in a session, raise the budget or the Generation share in `[budget_shares]` so at least 2–3 hypotheses reach the tournament. Generation's 19 library searches used its whole 0.72 share in run 2.
-- **Voyage rerank:** it hit `RateLimitError` 21 times in run 2 and fell back to fused order. Accounts without a payment method get very low rate limits. Add one on the Voyage dashboard before the demo; the free token allowance still applies.
+- **Voyage rerank:** it hit `RateLimitError` 21 times in run 2 and fell back to fused order, because accounts without a payment method get very low rate limits. A payment method was added the same day, and 10 back-to-back `rerank-2.5` calls then all succeeded in 3 s.
 - **Orphan artifact:** one hypothesis artifact was written to disk with no DB row or vector. It was probably a dedup-suppressed near-duplicate, but no event records it.
 
 ## 11. Known gaps (deliberately deferred)
