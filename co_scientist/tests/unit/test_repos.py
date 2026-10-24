@@ -719,26 +719,106 @@ async def _seed_elo_pair(any_conn, sid: str):
     return a, b
 
 
-def _elo_kwargs(a: str, b: str) -> dict:
+def _elo_kwargs(a: str, b: str, match_id: str = "m1", winner: str = "a") -> dict:
     return dict(
-        match_id="m1", hyp_a=a, hyp_b=b, winner="a",
-        elo_a_before=1200.0, elo_b_before=1250.0,
-        elo_a_after=1216.0, elo_b_after=1234.0,
+        match_id=match_id, hyp_a=a, hyp_b=b, winner=winner,
+        k_new=32, k_warm=16, initial_elo=1200.0,
     )
 
 
+def _expected_elo(winner: str = "a"):
+    """Seeded pair is a=1200, b=1250, both unplayed."""
+    from co_scientist.orchestrator.elo import update_elo
+
+    return update_elo(1200.0, 1250.0, winner, 0, k_new=32, k_warm=16)
+
+
 @pytest.mark.asyncio
-async def test_apply_elo_update_is_idempotent(any_conn) -> None:
+async def test_record_match_result_is_idempotent(any_conn) -> None:
     s = await _make_session(any_conn)
     a, b = await _seed_elo_pair(any_conn, s.id)
     kw = _elo_kwargs(a, b)
-    assert await tourney_repo.apply_elo_update(any_conn, **kw) is True
-    assert await tourney_repo.apply_elo_update(any_conn, **kw) is False
+    exp = _expected_elo()
+    got = await tourney_repo.record_match_result(any_conn, **kw)
+    assert got is not None
+    assert (got.elo_a_before, got.elo_b_before) == (1200.0, 1250.0)
+    assert got.elo_a_after == pytest.approx(exp.elo_a_after)
+    assert got.elo_b_after == pytest.approx(exp.elo_b_after)
+    assert (got.k, got.expected_a) == (exp.k, pytest.approx(exp.expected_a))
+    assert await tourney_repo.record_match_result(any_conn, **kw) is None
     ha, hb = await hyp_repo.fetch(any_conn, a), await hyp_repo.fetch(any_conn, b)
-    assert (ha.matches_played, ha.elo) == (1, 1216.0)
-    assert (hb.matches_played, hb.elo) == (1, 1234.0)
+    assert (ha.matches_played, ha.elo) == (1, pytest.approx(exp.elo_a_after))
+    assert (hb.matches_played, hb.elo) == (1, pytest.approx(exp.elo_b_after))
     (m,) = await tourney_repo.list_for_hypothesis(any_conn, a)
-    assert (m.elo_a_after, m.elo_b_after) == (1216.0, 1234.0)
+    assert (m.elo_a_before, m.elo_b_before) == (1200.0, 1250.0)
+    assert m.elo_a_after == pytest.approx(exp.elo_a_after)
+    assert m.elo_b_after == pytest.approx(exp.elo_b_after)
+
+
+@pytest.mark.asyncio
+async def test_record_match_result_missing_hypothesis_raises_and_writes_nothing(
+    any_conn,
+) -> None:
+    s = await _make_session(any_conn)
+    a, _ = await _seed_elo_pair(any_conn, s.id)
+    with pytest.raises(ValueError):
+        await tourney_repo.record_match_result(any_conn, **_elo_kwargs(a, "hyp_nope"))
+    assert len(await _read_journal(any_conn)) == 0
+    assert (await hyp_repo.fetch(any_conn, a)).matches_played == 0
+
+
+async def _read_journal(conn) -> list[dict]:
+    """Backend-specific read of every elo_journal row, normalised to common keys."""
+    from co_scientist.storage.atlas.client import AtlasConn
+
+    keys = ("match_id", "hyp_a", "hyp_b", "elo_a_before", "elo_b_before",
+            "elo_a_after", "elo_b_after", "applied_at")
+    if isinstance(conn, AtlasConn):
+        docs = [d async for d in conn.coll("elo_journal").find({})]
+        return [{k: d[k] for k in keys} for d in docs]
+    async with conn.execute("SELECT * FROM elo_journal") as cur:
+        return [{k: r[k] for k in keys} for r in await cur.fetchall()]
+
+
+@pytest.mark.asyncio
+async def test_record_match_result_concurrent_matches_lose_no_update(any_conn) -> None:
+    import asyncio
+
+    s = await _make_session(any_conn)
+    hid = f"hyp_{s.id}_H"
+    opps = [f"hyp_{s.id}_o{i}" for i in range(6)]
+    for i, h in enumerate([hid, *opps]):
+        await hyp_repo.insert(any_conn, _hyp(s.id, 0, elo=1200.0).model_copy(
+            update={"id": h, "title": f"t{i}"}))
+    winners = ["a", "a", "b", "a", "b", "a"]  # H wins 4, loses 2
+    for i, o in enumerate(opps):
+        await tourney_repo.insert_match(any_conn, _match(s.id, i, hid, o))
+    results = await asyncio.gather(*(
+        tourney_repo.record_match_result(
+            any_conn, **_elo_kwargs(hid, o, match_id=f"m{i}", winner=w))
+        for i, (o, w) in enumerate(zip(opps, winners, strict=True))
+    ))
+    assert all(r is not None for r in results)
+
+    h = await hyp_repo.fetch(any_conn, hid)
+    assert h.matches_played == 6
+    rows = await _read_journal(any_conn)
+    assert len(rows) == 6
+    # H is hyp_a in every match. Walk the chain from 1200 by matching each row's
+    # elo_before to the previous elo_after (applied_at is ms-resolution and can tie, so
+    # it cannot order rows on its own). A lost update breaks the walk.
+    by_before: dict[float, list[dict]] = {}
+    for r in rows:
+        by_before.setdefault(r["elo_a_before"], []).append(r)
+    cur_elo, walked = 1200.0, []
+    while by_before.get(cur_elo):
+        r = by_before[cur_elo].pop()
+        walked.append(r)
+        cur_elo = r["elo_a_after"]
+    assert len(walked) == 6, "journal rows do not form one chain: an Elo update was lost"
+    assert walked[-1]["elo_a_after"] == pytest.approx(h.elo)
+    total = h.elo + sum([(await hyp_repo.fetch(any_conn, o)).elo for o in opps])
+    assert total == pytest.approx(1200.0 * 7)
 
 
 @pytest.mark.asyncio
@@ -868,7 +948,7 @@ async def test_tournament_counts_and_rationales(any_conn) -> None:
 
 
 @pytest.mark.asyncio
-async def test_apply_elo_update_rolls_back_on_failure(any_conn) -> None:
+async def test_record_match_result_rolls_back_on_failure(any_conn) -> None:
     from co_scientist.storage.atlas.client import AtlasConn
 
     if not isinstance(any_conn, AtlasConn):
@@ -894,18 +974,18 @@ async def test_apply_elo_update_rolls_back_on_failure(any_conn) -> None:
 
     bad = _FailingConn(client=any_conn.client, db=any_conn.db, prefix=any_conn.prefix)
     with pytest.raises(RuntimeError, match="boom"):
-        await tourney_repo.apply_elo_update(bad, **_elo_kwargs(a, b))
+        await tourney_repo.record_match_result(bad, **_elo_kwargs(a, b))
 
     assert await any_conn.coll("elo_journal").count_documents({}) == 0
     ha, hb = await hyp_repo.fetch(any_conn, a), await hyp_repo.fetch(any_conn, b)
     assert (ha.matches_played, ha.elo) == (0, 1200.0)
     assert (hb.matches_played, hb.elo) == (0, 1250.0)
     # and the same match can still be applied afterwards
-    assert await tourney_repo.apply_elo_update(any_conn, **_elo_kwargs(a, b)) is True
+    assert await tourney_repo.record_match_result(any_conn, **_elo_kwargs(a, b)) is not None
 
 
 @pytest.mark.asyncio
-async def test_apply_elo_update_retries_transient_transaction_error(any_conn) -> None:
+async def test_record_match_result_retries_transient_transaction_error(any_conn) -> None:
     from pymongo.errors import PyMongoError
 
     from co_scientist.storage.atlas.client import AtlasConn
@@ -936,11 +1016,12 @@ async def test_apply_elo_update_retries_transient_transaction_error(any_conn) ->
             return _Flaky(c) if name == "tournament_matches" else c
 
     flaky = _FlakyConn(client=any_conn.client, db=any_conn.db, prefix=any_conn.prefix)
-    assert await tourney_repo.apply_elo_update(flaky, **_elo_kwargs(a, b)) is True
+    assert await tourney_repo.record_match_result(flaky, **_elo_kwargs(a, b)) is not None
     assert calls["n"] == 2  # first attempt aborted, retried once
     assert await any_conn.coll("elo_journal").count_documents({}) == 1
     ha = await hyp_repo.fetch(any_conn, a)
-    assert (ha.matches_played, ha.elo) == (1, 1216.0)  # applied once, not twice
+    exp = _expected_elo()
+    assert (ha.matches_played, ha.elo) == (1, pytest.approx(exp.elo_a_after))  # once, not twice
 
 
 @pytest.mark.asyncio

@@ -180,7 +180,7 @@ All of these are encoded in the existing code. Copy the patterns.
 - **`tasks.claim_one`:** a single `find_one_and_update` on `{session_id, status: "pending"}`, sorted by `priority, created_at, _id`. Two workers can never claim the same task; tested with 10 concurrent claims.
 - **`tasks.fail`:** one atomic pipeline `find_one_and_update` that increments attempts and chooses dead or pending server-side.
 - **`tasks.reclaim_expired_leases`:** server-side pipeline updates (dead-letter, then requeue).
-- **`tournaments.apply_elo_update`:** a multi-document transaction (`start_session` + `with_transaction`). It inserts `elo_journal{_id: match_id}`, updates both hypotheses, then updates the match. A duplicate `match_id` returns `False` with nothing written. Tested for rollback on a mid-transaction failure, and for retry on `TransientTransactionError`.
+- **`tournaments.record_match_result`:** a multi-document transaction (`start_session` + `with_transaction`) that does the whole Elo update. Inside it, it reads both hypotheses' current `elo` and `matches_played`, computes `update_elo`, inserts `elo_journal{_id: match_id}`, updates both hypotheses (`$set elo`, `$inc matches_played`), then writes the in-transaction before/after values onto the match row. Callers never pass precomputed Elo. When two overlapping transactions update the same hypothesis, the loser gets a `WriteConflict` (a `TransientTransactionError`); `with_transaction` re-runs the callback, which re-reads the committed values. Do not catch `WriteConflict` yourself. It returns an `AppliedElo`, or `None` when `match_id` is already journaled (nothing written), and raises `ValueError` (nothing written) if a hypothesis is missing. On SQLite the reads happen after `BEGIN IMMEDIATE`, with a per-connection lock so tasks sharing a connection don't interleave. Tested for idempotency, rollback on a mid-transaction failure, retry on `TransientTransactionError`, and 6 concurrent matches on one hypothesis (the journal rows must chain and Elo must stay zero-sum).
 
 ---
 
@@ -399,7 +399,7 @@ Fixes landed between the runs:
 - `[ranking] max_output_tokens` defaults to 8192 (`24dc274`).
 
 Still not seen in a real run:
-- **Elo transaction:** it has only been verified by the live-Atlas tests (idempotency, rollback, transient retry). To exercise it in a session, raise the budget or the Generation share in `[budget_shares]` so at least 2–3 hypotheses reach the tournament. Generation's 19 library searches used its whole 0.72 share in run 2.
+- **Elo transaction:** it has only been verified by the live-Atlas tests (idempotency, rollback, transient retry, concurrent matches). Concurrent matches on one hypothesis no longer lose updates: an earlier version `$set` an Elo computed before the debate, so overlapping matches overwrote each other's delta. The update is now computed inside the transaction (see section 4). To exercise it in a session, raise the budget or the Generation share in `[budget_shares]` so at least 2–3 hypotheses reach the tournament. Generation's 19 library searches used its whole 0.72 share in run 2.
 - **Voyage rerank:** it hit `RateLimitError` 21 times in run 2 and fell back to fused order, because accounts without a payment method get very low rate limits. A payment method was added the same day, and 10 back-to-back `rerank-2.5` calls then all succeeded in 3 s.
 - **Orphan artifact:** one hypothesis artifact was written to disk with no DB row or vector. It was probably a dedup-suppressed near-duplicate, but no event records it.
 

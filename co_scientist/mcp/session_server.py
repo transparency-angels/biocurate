@@ -54,7 +54,7 @@ from ..models import (
     SystemFeedback,
     TournamentMatch,
 )
-from ..orchestrator.elo import update_elo
+from ..orchestrator.elo import expected_score, k_factor
 from ..storage import db as db_mod
 from ..storage.artifacts import read_json, write_json
 from ..storage.atlas import client as atlas_client
@@ -834,42 +834,59 @@ class SessionMcpServer:
             a = await hyp_repo.fetch(conn, hyp_a) or a
             b = await hyp_repo.fetch(conn, hyp_b) or b
 
-            elo_a_before = float(a.elo if a.elo is not None else initial_elo)
-            elo_b_before = float(b.elo if b.elo is not None else initial_elo)
-            upd = update_elo(
-                elo_a_before, elo_b_before, winner,
-                min(a.matches_played, b.matches_played),
-                k_new=self.cfg.ranking.k_factor_new,
-                k_warm=self.cfg.ranking.k_factor_warm,
-            )
+            # Provisional pre-read ratings for the descriptive row; record_match_result
+            # re-reads the stored ones inside its transaction and overwrites them.
+            elo_a_pre = float(a.elo if a.elo is not None else initial_elo)
+            elo_b_pre = float(b.elo if b.elo is not None else initial_elo)
             mid = ids.match_id(hyp_a, hyp_b, round_id)
             await tourney_repo.insert_match(conn, TournamentMatch(
                 id=mid, session_id=a.session_id, created_at=datetime.now(UTC),
                 hyp_a=hyp_a, hyp_b=hyp_b, mode=mode,          # type: ignore[arg-type]
                 winner=winner,                                # type: ignore[arg-type]
-                elo_a_before=elo_a_before, elo_b_before=elo_b_before,
-                elo_a_after=upd.elo_a_after, elo_b_after=upd.elo_b_after,
+                elo_a_before=elo_a_pre, elo_b_before=elo_b_pre,
                 rationale=rationale,
             ))
-            applied = await tourney_repo.apply_elo_update(
+            applied = await tourney_repo.record_match_result(
                 conn,
                 match_id=mid, hyp_a=hyp_a, hyp_b=hyp_b, winner=winner,
-                elo_a_before=elo_a_before, elo_b_before=elo_b_before,
-                elo_a_after=upd.elo_a_after, elo_b_after=upd.elo_b_after,
+                k_new=self.cfg.ranking.k_factor_new,
+                k_warm=self.cfg.ranking.k_factor_warm,
+                initial_elo=initial_elo,
             )
+            if applied is None:
+                # Already recorded: report what that first run stored, if still readable.
+                stored = next(
+                    (m for m in await tourney_repo.list_for_hypothesis(conn, hyp_a)
+                     if m.id == mid and m.elo_a_after is not None and m.elo_b_after is not None),
+                    None,
+                )
+                if stored is not None:
+                    elo_a_pre, elo_b_pre = stored.elo_a_before, stored.elo_b_before
+                    elo_a_post, elo_b_post = stored.elo_a_after, stored.elo_b_after
+                else:
+                    elo_a_post, elo_b_post = elo_a_pre, elo_b_pre
+                k, expected_a = k_factor(
+                    min(a.matches_played, b.matches_played),
+                    k_new=self.cfg.ranking.k_factor_new,
+                    k_warm=self.cfg.ranking.k_factor_warm,
+                ), expected_score(elo_a_pre, elo_b_pre)
+            else:
+                elo_a_pre, elo_b_pre = applied.elo_a_before, applied.elo_b_before
+                elo_a_post, elo_b_post = applied.elo_a_after, applied.elo_b_after
+                k, expected_a = applied.k, applied.expected_a
         return text_result({
             "match_id": mid,
             "session_id": a.session_id,
             "winner": winner,
-            "elo_applied": applied,
+            "elo_applied": applied is not None,
             "elo": {
-                hyp_a: {"before": elo_a_before, "after": upd.elo_a_after},
-                hyp_b: {"before": elo_b_before, "after": upd.elo_b_after},
+                hyp_a: {"before": elo_a_pre, "after": elo_a_post},
+                hyp_b: {"before": elo_b_pre, "after": elo_b_post},
             },
-            "k_factor": upd.k,
-            "expected_a": upd.expected_a,
+            "k_factor": k,
+            "expected_a": expected_a,
             "note": (
-                "recorded" if applied else
+                "recorded" if applied is not None else
                 f"this pair already played round {round_id!r}; no Elo moved. "
                 "Pass a different round_id to rematch deliberately."
             ),

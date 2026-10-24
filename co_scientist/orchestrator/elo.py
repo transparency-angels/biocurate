@@ -13,6 +13,22 @@ class EloUpdate:
     k: int
 
 
+@dataclass(frozen=True)
+class AppliedElo:
+    """An Elo update as committed by `tournaments.record_match_result`.
+
+    The before/after values are the ones read inside the transaction, so they can
+    differ from what the caller saw before the debate if other matches landed meanwhile.
+    """
+
+    elo_a_before: float
+    elo_b_before: float
+    elo_a_after: float
+    elo_b_after: float
+    k: int
+    expected_a: float
+
+
 def k_factor(matches_played: int, *, new_threshold: int = 5, k_new: int = 32, k_warm: int = 16) -> int:
     """Higher K for new entrants → faster convergence; lower K once seasoned."""
     return k_new if matches_played < new_threshold else k_warm

@@ -182,3 +182,30 @@ async def test_ranking_invalid_verdict_logs_stop_reason(
     assert result.extra == {"reason": "unparseable verdict"}
     warn = [e for e in logs if e["event"] == "ranking_invalid_verdict"]
     assert warn and warn[0]["stop_reason"] == "max_tokens"
+
+
+async def test_ranking_uses_in_transaction_elo(monkeypatch: pytest.MonkeyPatch) -> None:
+    from co_scientist.orchestrator.elo import AppliedElo
+
+    calls: list[dict] = []
+    applied = AppliedElo(
+        elo_a_before=1300.0, elo_b_before=1100.0,
+        elo_a_after=1310.0, elo_b_after=1090.0, k=16, expected_a=0.76,
+    )
+
+    async def record(db, **kw):
+        calls.append(kw)
+        return applied
+
+    monkeypatch.setattr(ranking_mod.tourney_repo, "record_match_result", record)
+    llm = _fake_llm("hm\nbetter idea: 1", "end_turn", [])
+    with capture_logs() as logs:
+        result = await _run_one_match(monkeypatch, Config(), llm)
+    (kw,) = calls
+    assert (kw["hyp_a"], kw["hyp_b"], kw["winner"]) == ("a", "b", "a")
+    assert (kw["k_new"], kw["k_warm"], kw["initial_elo"]) == (32, 16, 1200)
+    assert result.extra["elo_applied"] is True
+    (done,) = [e for e in logs if e["event"] == "match_complete"]
+    # the log reports the in-transaction values, not the pre-debate 1200s
+    assert (done["elo_a"], done["elo_b"]) == (1310.0, 1090.0)
+    assert done["applied"] is True

@@ -25,7 +25,6 @@ from ..llm.routing import route
 from ..llm.types import AgentCallSpec, CachedBlock, CallContext
 from ..logging import get_logger
 from ..models import Hypothesis, Task, TaskResult, TournamentMatch
-from ..orchestrator.elo import update_elo
 from ..safety.quoting import quote_hypothesis
 from ..storage.repos import (
     hypotheses as hyp_repo,
@@ -100,7 +99,7 @@ class RankingAgent(BaseAgent):
             session, hyp_a, hyp_b, mode=mode
         )
         # Derive the round_id deterministically from the task id so that a
-        # crash-then-retry computes the *same* match_id. `apply_elo_update`
+        # crash-then-retry computes the *same* match_id. `record_match_result`
         # below is idempotent on `match_id` — a non-deterministic round_id
         # (e.g. a wall-clock timestamp) defeats that and would double-apply
         # the Elo delta on retry.
@@ -120,43 +119,40 @@ class RankingAgent(BaseAgent):
             )
             return TaskResult(kind="noop", extra={"reason": "unparseable verdict"})
 
-        # Compute the Elo update.
-        elo_a_before = float(hyp_a.elo or self.deps.cfg.ranking.elo_initial)
-        elo_b_before = float(hyp_b.elo or self.deps.cfg.ranking.elo_initial)
-        min_matches = min(hyp_a.matches_played, hyp_b.matches_played)
-        upd = update_elo(
-            elo_a_before, elo_b_before, verdict,
-            matches_played_min=min_matches,
-            k_new=self.deps.cfg.ranking.k_factor_new,
-            k_warm=self.deps.cfg.ranking.k_factor_warm,
-        )
-
+        # Provisional pre-debate ratings for the descriptive row. Other matches on these
+        # hypotheses may have landed during the debate, so `record_match_result` re-reads
+        # the stored ratings, computes the update in its transaction and overwrites the
+        # row's before/after with the values it actually used.
+        init = self.deps.cfg.ranking.elo_initial
+        elo_a_pre = float(hyp_a.elo or init)
+        elo_b_pre = float(hyp_b.elo or init)
         mid = ids.match_id(hyp_a.id, hyp_b.id, round_id)
         await tourney_repo.insert_match(self.deps.db, TournamentMatch(
             id=mid, session_id=session.id,
             created_at=datetime.now(UTC),
             hyp_a=hyp_a.id, hyp_b=hyp_b.id, mode=mode, winner=verdict,
-            elo_a_before=elo_a_before, elo_b_before=elo_b_before,
-            elo_a_after=upd.elo_a_after, elo_b_after=upd.elo_b_after,
+            elo_a_before=elo_a_pre, elo_b_before=elo_b_pre,
             rationale=rationale, transcript_id=transcript_id, similarity=similarity,
         ))
-        applied = await tourney_repo.apply_elo_update(
+        applied = await tourney_repo.record_match_result(
             self.deps.db,
             match_id=mid, hyp_a=hyp_a.id, hyp_b=hyp_b.id, winner=verdict,
-            elo_a_before=elo_a_before, elo_b_before=elo_b_before,
-            elo_a_after=upd.elo_a_after, elo_b_after=upd.elo_b_after,
+            k_new=self.deps.cfg.ranking.k_factor_new,
+            k_warm=self.deps.cfg.ranking.k_factor_warm,
+            initial_elo=float(init),
         )
         log.info(
             "match_complete",
             mode=mode, hyp_a=hyp_a.id, hyp_b=hyp_b.id, winner=verdict,
-            elo_a=upd.elo_a_after, elo_b=upd.elo_b_after,
-            applied=applied, similarity=similarity,
+            elo_a=applied.elo_a_after if applied else None,
+            elo_b=applied.elo_b_after if applied else None,
+            applied=applied is not None, similarity=similarity,
         )
         return TaskResult(
             kind="tournament_match_complete",
             match_ids=[mid],
             hypothesis_ids=[hyp_a.id, hyp_b.id],
-            extra={"mode": mode, "winner": verdict, "elo_applied": applied},
+            extra={"mode": mode, "winner": verdict, "elo_applied": applied is not None},
         )
 
     # ----------------------------- pair selection ----------------------------- #

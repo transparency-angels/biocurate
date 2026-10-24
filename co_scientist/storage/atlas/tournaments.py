@@ -1,7 +1,8 @@
 """Atlas implementations for `tournaments`.
 
-`apply_elo_update` runs in a multi-document transaction guarded by the `_id` of the
-`elo_journal` document (= match id), so re-applying the same match is a no-op.
+`record_match_result` reads the current ratings, computes the Elo update and writes it in
+one multi-document transaction guarded by the `_id` of the `elo_journal` document (= match
+id), so re-applying the same match is a no-op and overlapping matches are retried.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from typing import Any
 from pymongo.errors import DuplicateKeyError
 
 from ...models import TournamentMatch
+from ...orchestrator.elo import AppliedElo, update_elo
 from ._codec import aware
 from .client import AtlasConn
 
@@ -65,25 +67,40 @@ async def insert_match(conn: AtlasConn, m: TournamentMatch) -> bool:
     return True
 
 
-async def apply_elo_update(
+async def record_match_result(
     conn: AtlasConn,
     *,
     match_id: str,
     hyp_a: str,
     hyp_b: str,
     winner: str,
-    elo_a_before: float,
-    elo_b_before: float,
-    elo_a_after: float,
-    elo_b_after: float,
-) -> bool:
-    """Apply an Elo update atomically and idempotently.
+    k_new: int,
+    k_warm: int,
+    initial_elo: float,
+) -> AppliedElo | None:
+    """Compute and apply an Elo update from the *current* stored ratings, atomically.
 
-    Returns True if newly applied; False if the journal already has this match id.
+    Everything, including the reads, runs in one transaction. If another transaction
+    updates the same hypothesis first, the write raises a WriteConflict (a
+    TransientTransactionError), `with_transaction` re-runs the callback, and the re-read
+    sees the committed values, so no update is lost. Returns None if the journal already
+    has this match id; raises ValueError (nothing written) if a hypothesis is missing.
     """
-    applied_at = int(time.time() * 1000)
 
-    async def txn(s) -> None:
+    async def txn(s) -> AppliedElo:
+        applied_at = int(time.time() * 1000)  # per attempt, so a retry stamps its own time
+        hyps = conn.coll("hypotheses")
+        cur: dict[str, tuple[float, int]] = {}
+        for hid in (hyp_a, hyp_b):
+            d = await hyps.find_one(
+                {"_id": hid}, {"elo": 1, "matches_played": 1}, session=s
+            )
+            if d is None:
+                raise ValueError(f"no such hypothesis: {hid}")
+            elo = d.get("elo")
+            cur[hid] = (initial_elo if elo is None else float(elo), d["matches_played"])
+        (elo_a, mp_a), (elo_b, mp_b) = cur[hyp_a], cur[hyp_b]
+        upd = update_elo(elo_a, elo_b, winner, min(mp_a, mp_b), k_new=k_new, k_warm=k_warm)
         await conn.coll("elo_journal").insert_one(
             {
                 "_id": match_id,
@@ -91,33 +108,45 @@ async def apply_elo_update(
                 "hyp_a": hyp_a,
                 "hyp_b": hyp_b,
                 "winner": winner,
-                "elo_a_before": elo_a_before,
-                "elo_b_before": elo_b_before,
-                "elo_a_after": elo_a_after,
-                "elo_b_after": elo_b_after,
+                "elo_a_before": elo_a,
+                "elo_b_before": elo_b,
+                "elo_a_after": upd.elo_a_after,
+                "elo_b_after": upd.elo_b_after,
                 "applied_at": applied_at,
             },
             session=s,
         )
-        hyps = conn.coll("hypotheses")
-        for hid, elo in ((hyp_a, elo_a_after), (hyp_b, elo_b_after)):
+        for hid, elo_after in ((hyp_a, upd.elo_a_after), (hyp_b, upd.elo_b_after)):
             await hyps.update_one(
-                {"_id": hid}, {"$set": {"elo": elo}, "$inc": {"matches_played": 1}}, session=s
+                {"_id": hid},
+                {"$set": {"elo": elo_after}, "$inc": {"matches_played": 1}},
+                session=s,
             )
-        # reflect the after-Elo into the descriptive match row if it exists
+        # reflect the in-transaction values into the descriptive match row if it exists
         await conn.coll(_COLL).update_one(
             {"_id": match_id},
-            {"$set": {"elo_a_after": elo_a_after, "elo_b_after": elo_b_after}},
+            {
+                "$set": {
+                    "elo_a_before": elo_a,
+                    "elo_b_before": elo_b,
+                    "elo_a_after": upd.elo_a_after,
+                    "elo_b_after": upd.elo_b_after,
+                }
+            },
             session=s,
+        )
+        return AppliedElo(
+            elo_a_before=elo_a, elo_b_before=elo_b,
+            elo_a_after=upd.elo_a_after, elo_b_after=upd.elo_b_after,
+            k=upd.k, expected_a=upd.expected_a,
         )
 
     try:
         async with conn.client.start_session() as s:
             # with_transaction retries TransientTransactionError / UnknownTransactionCommitResult
-            await s.with_transaction(txn)
+            return await s.with_transaction(txn)
     except DuplicateKeyError:
-        return False  # match id already journaled; the transaction aborted, nothing written
-    return True
+        return None  # match id already journaled; the transaction aborted, nothing written
 
 
 async def count_matches(conn: AtlasConn, session_id: str) -> int:

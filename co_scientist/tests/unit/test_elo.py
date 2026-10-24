@@ -46,7 +46,7 @@ def test_underdog_win_is_high_payoff() -> None:
 
 
 @pytest.mark.asyncio
-async def test_apply_elo_update_is_idempotent(conn) -> None:
+async def test_record_match_result_is_idempotent(conn) -> None:
     """Re-applying the same match_id never double-counts."""
     now = datetime.now(UTC)
 
@@ -78,26 +78,23 @@ async def test_apply_elo_update_is_idempotent(conn) -> None:
     )
     await tourney_repo.insert_match(conn, m)
 
-    ok1 = await tourney_repo.apply_elo_update(
-        conn, match_id=mid, hyp_a="hyp_x", hyp_b="hyp_y", winner="a",
-        elo_a_before=1200.0, elo_b_before=1200.0,
-        elo_a_after=1216.0, elo_b_after=1184.0,
+    kw = dict(
+        match_id=mid, hyp_a="hyp_x", hyp_b="hyp_y", winner="a",
+        k_new=32, k_warm=16, initial_elo=1200.0,
     )
-    assert ok1 is True
+    first = await tourney_repo.record_match_result(conn, **kw)
+    assert first is not None
+    assert first.elo_a_after == pytest.approx(1216.0)
+    assert first.elo_b_after == pytest.approx(1184.0)
 
     # Re-apply: should no-op.
-    ok2 = await tourney_repo.apply_elo_update(
-        conn, match_id=mid, hyp_a="hyp_x", hyp_b="hyp_y", winner="a",
-        elo_a_before=1200.0, elo_b_before=1200.0,
-        elo_a_after=1216.0, elo_b_after=1184.0,
-    )
-    assert ok2 is False
+    assert await tourney_repo.record_match_result(conn, **kw) is None
 
     # State reflects exactly one update
     hx = await hyp_repo.fetch(conn, "hyp_x")
     hy = await hyp_repo.fetch(conn, "hyp_y")
     assert hx is not None and hy is not None
-    assert hx.elo == 1216.0
-    assert hy.elo == 1184.0
+    assert hx.elo == pytest.approx(1216.0)
+    assert hy.elo == pytest.approx(1184.0)
     assert hx.matches_played == 1
     assert hy.matches_played == 1
