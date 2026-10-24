@@ -514,3 +514,68 @@ async def test_hypothesis_record_is_idempotent_on_the_same_summary(
     second = await call(server, "hypothesis_record", **args)
     assert first["hypothesis_id"] == second["hypothesis_id"]
     assert second["inserted"] is False
+
+
+# --------------------------------------------------------------------------- #
+# the spawned run must see the same config overlay as this server
+
+
+@pytest.fixture
+def spawned(server: SessionMcpServer, monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    from co_scientist.mcp import session_server as ss
+
+    argvs: list[list[str]] = []
+    monkeypatch.setattr(ss, "_backend_ready", lambda cfg: (True, "ok"))
+    monkeypatch.setattr(ss, "_spawn_detached", lambda argv, log: argvs.append(argv) or 4242)
+
+    async def fake_await(goal, known):
+        return "sess-1"
+
+    monkeypatch.setattr(server, "_await_new_session", fake_await)
+    return argvs
+
+
+async def test_session_start_passes_overlay_to_the_run(
+    server: SessionMcpServer, spawned, tmp_path
+) -> None:
+    server.cfg._overlay_path = tmp_path / "atlas.toml"
+    await server.handle("session_start", {"goal": "g"})
+    argv = spawned[0]
+    i = argv.index("co_scientist.cli")
+    assert argv[i + 1 : i + 3] == ["-c", str(tmp_path / "atlas.toml")]
+    assert argv[i + 3] == "run"
+
+
+async def test_session_start_without_overlay_has_no_config_flag(
+    server: SessionMcpServer, spawned
+) -> None:
+    await server.handle("session_start", {"goal": "g"})
+    assert "-c" not in spawned[0]
+
+
+async def test_session_start_falls_back_to_cosci_config_env(
+    server: SessionMcpServer, spawned, monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("COSCI_CONFIG", str(tmp_path / "env.toml"))
+    await server.handle("session_start", {"goal": "g"})
+    i = spawned[0].index("co_scientist.cli")
+    assert spawned[0][i + 1 : i + 3] == ["-c", str((tmp_path / "env.toml").resolve())]
+
+
+async def test_session_resume_passes_overlay_to_the_run(
+    server: SessionMcpServer, spawned, tmp_path
+) -> None:
+    sid = await _make_session(server.cfg)
+    server.cfg._overlay_path = tmp_path / "atlas.toml"
+    await server.handle("session_resume", {"session_id": sid})
+    argv = spawned[0]
+    i = argv.index("co_scientist.cli")
+    assert argv[i + 1 :] == ["-c", str(tmp_path / "atlas.toml"), "resume", sid]
+
+
+async def test_session_resume_without_overlay_has_no_config_flag(
+    server: SessionMcpServer, spawned
+) -> None:
+    sid = await _make_session(server.cfg)
+    await server.handle("session_resume", {"session_id": sid})
+    assert spawned[0][-2:] == ["resume", sid] and "-c" not in spawned[0]

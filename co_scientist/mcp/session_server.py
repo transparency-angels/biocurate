@@ -466,6 +466,13 @@ class SessionMcpServer:
         finally:
             await conn.close()
 
+    def _config_args(self) -> list[str]:
+        """`-c <overlay>` so a spawned run uses the same config (and backend) as this server."""
+        path = self.cfg._overlay_path
+        if path is None and (env := os.environ.get("COSCI_CONFIG")):
+            path = Path(env).resolve()
+        return ["-c", str(path)] if path is not None else []
+
     # ----------------------------- lifecycle ----------------------------- #
 
     async def _t_session_start(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -479,7 +486,7 @@ class SessionMcpServer:
         if not ready:
             raise _ToolError(f"LLM backend is not ready: {detail}. Call doctor for details.")
 
-        argv = [sys.executable, "-m", "co_scientist.cli", "run", goal]
+        argv = [sys.executable, "-m", "co_scientist.cli", *self._config_args(), "run", goal]
         if (n := args.get("n_initial")) is not None:
             argv += ["--n", str(int(n))]
         if (b := args.get("budget_usd")) is not None:
@@ -524,7 +531,9 @@ class SessionMcpServer:
         log_path = self.cfg.data_dir / "logs" / f"resume-{int(time.time())}.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         pid = _spawn_detached(
-            [sys.executable, "-m", "co_scientist.cli", "resume", session_id], log_path
+            [sys.executable, "-m", "co_scientist.cli", *self._config_args(),
+             "resume", session_id],
+            log_path,
         )
         return text_result({"session_id": session_id, "pid": pid, "log_path": str(log_path)})
 
