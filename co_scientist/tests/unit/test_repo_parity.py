@@ -8,7 +8,8 @@ import inspect
 import pytest
 
 MODULES = [
-    "embeddings", "events", "feedback", "hypotheses", "reviews",
+    "attachments", "blobs", "embeddings", "events", "feedback", "hypotheses",
+    "reviews",
     "sessions", "spans", "tasks", "tournaments", "transcripts",
 ]
 

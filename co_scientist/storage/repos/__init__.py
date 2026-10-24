@@ -1,6 +1,8 @@
 """Repository modules — thin async wrappers around aiosqlite."""
 
 from . import (  # noqa: F401
+    attachments,
+    blobs,
     embeddings,
     events,
     feedback,

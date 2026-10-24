@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -1034,3 +1034,76 @@ async def test_fail_returns_actual_status(any_conn) -> None:
     row = await _read_task(any_conn, t.id)
     assert row["attempts"] == 3 and row["status"] == "dead"
     assert row["last_error"] == "e2" and row["finished_at"] is not None
+
+
+# ---- blobs and attachments ----
+
+
+def _att(**kw):
+    from co_scientist.models.attachment import AttachmentMeta
+
+    base = {
+        "id": "att_1", "session_id": "ses_att", "filename": "a.csv",
+        "content_type": "text/csv", "size": 10, "sha256": "h1", "kind": "tabular",
+        "status": "stored", "blob_id": "b1", "uploaded_at": _now(), "error": None,
+    }
+    base.update(kw)
+    return AttachmentMeta(**base)
+
+
+async def test_blob_roundtrip_large(any_conn):
+    import os
+
+    from co_scientist.storage.repos import blobs
+
+    data = os.urandom(20 * 1024 * 1024)
+    bid = await blobs.put(any_conn, "attachments", "big.bin", data, {"k": "v"})
+    assert isinstance(bid, str)
+    assert await blobs.get(any_conn, "attachments", bid) == data
+    await blobs.delete(any_conn, "attachments", bid)
+
+
+async def test_attachment_insert_dedupes_and_lists_in_order(any_conn):
+    from co_scientist.storage.repos import attachments as repo
+
+    t = _now()
+    a = _att(id="att_a", filename="a.csv", uploaded_at=t + timedelta(seconds=2))
+    b = _att(id="att_b", filename="b.csv", sha256="h2", uploaded_at=t)
+    assert await repo.insert(any_conn, a) is True
+    assert await repo.insert(any_conn, b) is True
+    dup = _att(id="att_c", filename="a.csv", uploaded_at=t)
+    assert await repo.insert(any_conn, dup) is False
+    got = await repo.list_for_session(any_conn, "ses_att")
+    assert [x.id for x in got] == ["att_b", "att_a"]
+    assert got[0] == b
+    assert await repo.fetch(any_conn, "att_a") == a
+    assert await repo.fetch(any_conn, "nope") is None
+    await repo.delete(any_conn, "att_a")
+    assert await repo.fetch(any_conn, "att_a") is None
+
+
+async def test_attachment_bytes_accounting(any_conn):
+    from co_scientist.storage.repos import attachments as repo
+
+    await repo.insert(any_conn, _att(id="x1", sha256="s1", size=100))
+    await repo.insert(any_conn, _att(id="x2", sha256="s2", size=50))
+    await repo.insert(any_conn, _att(id="x3", session_id="ses_other", size=7))
+    assert await repo.session_bytes(any_conn, "ses_att") == 150
+    assert await repo.session_bytes(any_conn, "ses_empty") == 0
+    assert await repo.total_bytes(any_conn) == 157
+
+
+async def test_attachment_set_status_and_older_than(any_conn):
+    from co_scientist.storage.repos import attachments as repo
+
+    t = _now()
+    await repo.insert(any_conn, _att(id="old", sha256="s1", uploaded_at=t - timedelta(days=10)))
+    await repo.insert(any_conn, _att(id="new", sha256="s2", uploaded_at=t))
+    await repo.set_status(any_conn, "old", "failed", "boom")
+    m = await repo.fetch(any_conn, "old")
+    assert (m.status, m.error) == ("failed", "boom")
+    await repo.set_status(any_conn, "old", "ingested")
+    m = await repo.fetch(any_conn, "old")
+    assert (m.status, m.error) == ("ingested", None)
+    old = await repo.older_than(any_conn, t - timedelta(days=1))
+    assert [x.id for x in old] == ["old"]

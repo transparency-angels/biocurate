@@ -307,3 +307,11 @@ max_parallel = 3
 [web_ui]
 host = "127.0.0.1"
 port = 7878
+
+[attachments]
+max_files = 5
+max_file_mb = 25
+max_unzipped_mb = 512
+max_zip_members = 50
+max_session_mb = 125
+max_total_mb = 2048

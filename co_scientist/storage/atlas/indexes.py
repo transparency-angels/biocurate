@@ -136,6 +136,14 @@ BTREE_INDEXES: dict[str, list[IndexModel]] = {
     ],
     "library": [IndexModel([("pmcid", _A)], name="library_pmcid")],
     "hypothesis_vectors": [IndexModel([("session_id", _A)], name="hv_sess")],
+    "attachments_meta": [
+        IndexModel([("session_id", _A), ("uploaded_at", _A)], name="att_sess"),
+        IndexModel(
+            [("session_id", _A), ("sha256", _A), ("filename", _A)],
+            name="att_dedupe",
+            unique=True,
+        ),
+    ],
 }
 
 

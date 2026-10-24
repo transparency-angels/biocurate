@@ -110,3 +110,7 @@ def text_hash(text: str) -> str:
 def url_hash(url: str) -> str:
     """sha1 of URL for the web-fetch cache filename."""
     return hashlib.sha1(url.encode("utf-8")).hexdigest()
+
+
+def blob_id() -> str:
+    return f"blb_{_ulid()}"
