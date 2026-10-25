@@ -6,7 +6,8 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
+import asyncio
 
 import pytest
 from structlog.testing import capture_logs
@@ -209,3 +210,41 @@ async def test_ranking_uses_in_transaction_elo(monkeypatch: pytest.MonkeyPatch) 
     # the log reports the in-transaction values, not the pre-debate 1200s
     assert (done["elo_a"], done["elo_b"]) == (1310.0, 1090.0)
     assert done["applied"] is True
+
+
+async def test_ranking_emits_match_completed_event(monkeypatch: pytest.MonkeyPatch) -> None:
+    import contextlib
+    from co_scientist.orchestrator.events import GLOBAL_BUS
+    from co_scientist.orchestrator.elo import AppliedElo
+
+    applied = AppliedElo(
+        elo_a_before=1300.0, elo_b_before=1100.0,
+        elo_a_after=1310.0, elo_b_after=1090.0, k=16, expected_a=0.76,
+    )
+    monkeypatch.setattr(
+        ranking_mod.tourney_repo, "record_match_result", AsyncMock(return_value=applied)
+    )
+    llm = _fake_llm("The first hypothesis is clearer.\nbetter idea: 1", "end_turn", [])
+
+    events_received: list[dict] = []
+
+    async def sub() -> None:
+        async with contextlib.aclosing(GLOBAL_BUS.subscribe("ses")) as stream:
+            async for ev in stream:
+                if ev.name == "match_completed":
+                    events_received.append(ev.payload)
+                    break
+
+    sub_task = asyncio.create_task(sub())
+    await asyncio.sleep(0.01)
+    await _run_one_match(monkeypatch, Config(), llm)
+    await asyncio.wait_for(sub_task, timeout=2.0)
+
+    assert len(events_received) == 1
+    ev = events_received[0]
+    assert ev["winner"] == "a"
+    assert ev["winner_id"] == "a"
+    assert ev["loser_id"] == "b"
+    assert ev["elo_a_after"] == 1310.0
+    assert ev["elo_b_after"] == 1090.0
+    assert "clearer" in ev["rationale_snippet"]

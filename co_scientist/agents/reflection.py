@@ -15,8 +15,10 @@ from ..llm.routing import route
 from ..llm.tool_loop import ToolLoopExhausted, run_tool_loop
 from ..llm.types import AgentCallSpec, CachedBlock, CallContext
 from ..models import Review, ReviewScores, Task, TaskResult
+from ..orchestrator.events import GLOBAL_BUS
 from ..safety.quoting import quote_hypothesis
 from ..storage.artifacts import write_json
+from ..storage.repos import events as events_repo
 from ..storage.repos import hypotheses as hyp_repo
 from ..storage.repos import reviews as rev_repo
 from ..storage.repos import sessions as sess_repo
@@ -140,6 +142,35 @@ class ReflectionAgent(BaseAgent):
             title=f"Review: {review.verdict or 'completed'}",
             body=_scores_line(review.scores), agent=self.name, refs=[h.id],
         )
+        event_payload = {
+            "hypothesis_id": h.id,
+            "id": h.id,
+            "session_id": session.id,
+            "review_id": review_id,
+            "state": "reviewed",
+            "verdict": record.get("verdict"),
+            "scores": {
+                "novelty": record.get("novelty"),
+                "correctness": record.get("correctness"),
+                "testability": record.get("testability"),
+                "feasibility": record.get("feasibility"),
+            },
+        }
+        if self.deps.db is not None and (
+            hasattr(self.deps.db, "execute") or hasattr(self.deps.db, "coll")
+        ):
+            try:
+                await events_repo.emit(
+                    self.deps.db,
+                    session_id=session.id,
+                    task_id=task.id,
+                    agent=self.name,
+                    event="hypothesis_reviewed",
+                    payload=event_payload,
+                )
+            except Exception as e:
+                log.warning("hypothesis_reviewed_emit_failed", err=str(e))
+        await GLOBAL_BUS.publish(session.id, "hypothesis_reviewed", event_payload)
 
         return TaskResult(
             kind="review_completed",

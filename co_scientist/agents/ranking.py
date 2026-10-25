@@ -25,7 +25,11 @@ from ..llm.routing import route
 from ..llm.types import AgentCallSpec, CachedBlock, CallContext
 from ..logging import get_logger
 from ..models import Hypothesis, Task, TaskResult, TournamentMatch
+from ..orchestrator.events import GLOBAL_BUS
 from ..safety.quoting import quote_hypothesis
+from ..storage.repos import (
+    events as events_repo,
+)
 from ..storage.repos import (
     hypotheses as hyp_repo,
 )
@@ -154,6 +158,44 @@ class RankingAgent(BaseAgent):
         )
         if applied is not None:
             await self._post_match_milestone(session.id, hyp_a, hyp_b, verdict, applied)
+
+        rationale_snippet = (rationale or "").strip()[:300]
+        winner_id = hyp_a.id if verdict == "a" else hyp_b.id
+        loser_id = hyp_b.id if verdict == "a" else hyp_a.id
+        match_payload = {
+            "match_id": mid,
+            "session_id": session.id,
+            "hyp_a": hyp_a.id,
+            "hyp_b": hyp_b.id,
+            "winner": verdict,
+            "winner_id": winner_id,
+            "loser_id": loser_id,
+            "mode": mode,
+            "rationale": rationale,
+            "rationale_snippet": rationale_snippet,
+            "elo_a_before": applied.elo_a_before if applied else elo_a_pre,
+            "elo_b_before": applied.elo_b_before if applied else elo_b_pre,
+            "elo_a_after": applied.elo_a_after if applied else None,
+            "elo_b_after": applied.elo_b_after if applied else None,
+            "elo_applied": applied is not None,
+        }
+        if self.deps.db is not None and (
+            hasattr(self.deps.db, "execute") or hasattr(self.deps.db, "coll")
+        ):
+            try:
+                await events_repo.emit(
+                    self.deps.db,
+                    session_id=session.id,
+                    task_id=task.id,
+                    agent=self.name,
+                    event="match_completed",
+                    payload=match_payload,
+                )
+            except Exception as e:
+                log.warning("match_completed_emit_failed", err=str(e))
+        await GLOBAL_BUS.publish(session.id, "match_completed", match_payload)
+        await GLOBAL_BUS.publish(session.id, "match_complete", match_payload)
+
         return TaskResult(
             kind="tournament_match_complete",
             match_ids=[mid],

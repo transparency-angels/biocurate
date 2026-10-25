@@ -18,6 +18,7 @@ from co_scientist.agents.reflection import ReflectionAgent
 from co_scientist.agents.supervisor import Supervisor
 from co_scientist.config import Config
 from co_scientist.models import Hypothesis, ResearchPlan, Session
+from co_scientist.storage.repos import events as events_repo
 from co_scientist.storage.repos import hypotheses as hyp_repo
 from co_scientist.storage.repos import sessions as sess_repo
 from co_scientist.storage.repos import timeline as timeline_repo
@@ -60,6 +61,12 @@ async def test_generation_posts_hypothesis_created(tmp_cfg, conn, monkeypatch) -
     assert m.body_markdown == "KEAP1 loss drives resistance"
     assert list(m.refs) == [hid]
     assert m.agent == "generation"
+    events = await events_repo.recent(conn, s.id)
+    assert any(e["event"] == "hypothesis_generated" for e in events)
+    ev = next(e for e in events if e["event"] == "hypothesis_generated")
+    assert ev["payload"]["hypothesis_id"] == hid
+    assert ev["payload"]["state"] == "draft"
+    assert ev["payload"]["title"] == "KEAP1 and cisplatin"
 
 
 async def test_milestone_post_failure_does_not_fail_agent(tmp_cfg, conn, monkeypatch) -> None:
@@ -85,6 +92,11 @@ async def test_evolution_posts_evolution_completed(tmp_cfg, conn, monkeypatch) -
         "evolution_completed", "Evolved: KEAP1 and cisplatin", "evolution"
     )
     assert list(m.refs) == [hid]
+    events = await events_repo.recent(conn, s.id)
+    assert any(e["event"] == "hypothesis_generated" for e in events)
+    ev = next(e for e in events if e["event"] == "hypothesis_generated")
+    assert ev["payload"]["hypothesis_id"] == hid
+    assert ev["payload"]["state"] == "draft"
 
 
 async def test_reflection_posts_review_completed(tmp_cfg, conn, monkeypatch) -> None:
@@ -108,6 +120,12 @@ async def test_reflection_posts_review_completed(tmp_cfg, conn, monkeypatch) -> 
     assert m.title == "Review: missing_piece"
     assert m.body_markdown == "novelty 0.80 · correctness 0.50"
     assert list(m.refs) == ["hyp_r"]
+    events = await events_repo.recent(conn, s.id)
+    assert any(e["event"] == "hypothesis_reviewed" for e in events)
+    ev = next(e for e in events if e["event"] == "hypothesis_reviewed")
+    assert ev["payload"]["hypothesis_id"] == "hyp_r"
+    assert ev["payload"]["state"] == "reviewed"
+    assert ev["payload"]["verdict"] == "missing_piece"
 
 
 async def test_reflection_result_unchanged_when_post_fails(tmp_cfg, conn, monkeypatch) -> None:

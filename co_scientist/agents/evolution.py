@@ -24,9 +24,11 @@ from ..llm.tool_loop import ToolLoopExhausted, run_tool_loop
 from ..llm.types import AgentCallSpec, CachedBlock, CallContext
 from ..logging import get_logger
 from ..models import CitedPaper, Hypothesis, Task, TaskResult
+from ..orchestrator.events import GLOBAL_BUS
 from ..safety.quoting import quote_hypothesis
 from ..storage.artifacts import write_json
 from ..storage.repos import embeddings as emb_repo
+from ..storage.repos import events as events_repo
 from ..storage.repos import feedback as fb_repo
 from ..storage.repos import hypotheses as hyp_repo
 from ..storage.repos import reviews as rev_repo
@@ -260,6 +262,34 @@ class EvolutionAgent(BaseAgent):
                 self.deps.db, session_id, kind="evolution_completed",
                 title=f"Evolved: {h.title}", agent=self.name, refs=[hid],
             )
+            event_payload = {
+                "hypothesis_id": hid,
+                "id": hid,
+                "session_id": session_id,
+                "title": h.title,
+                "summary": h.summary,
+                "state": h.state,
+                "strategy": h.strategy,
+                "created_by": h.created_by,
+                "parent_ids": h.parent_ids,
+                "elo": h.elo,
+                "matches_played": h.matches_played,
+            }
+            if self.deps.db is not None and (
+                hasattr(self.deps.db, "execute") or hasattr(self.deps.db, "coll")
+            ):
+                try:
+                    await events_repo.emit(
+                        self.deps.db,
+                        session_id=session_id,
+                        task_id=None,
+                        agent=self.name,
+                        event="hypothesis_generated",
+                        payload=event_payload,
+                    )
+                except Exception as e:
+                    log.warning("hypothesis_generated_emit_failed", err=str(e))
+            await GLOBAL_BUS.publish(session_id, "hypothesis_generated", event_payload)
 
         if inserted and embed_payload is not None:
             try:

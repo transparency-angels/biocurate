@@ -83,7 +83,7 @@ async def record_match_result(
                 if row is None:
                     raise ValueError(f"no such hypothesis: {hid}")
                 elo = row["elo"]
-                cur_elo[hid] = (initial_elo if elo is None else float(elo), row["matches_played"])
+                cur_elo[hid] = (initial_elo if elo is None else float(elo), int(row["matches_played"] or 0))
             (elo_a, mp_a), (elo_b, mp_b) = cur_elo[hyp_a], cur_elo[hyp_b]
             upd = update_elo(elo_a, elo_b, winner, min(mp_a, mp_b), k_new=k_new, k_warm=k_warm)
             await conn.execute(
