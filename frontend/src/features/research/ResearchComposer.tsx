@@ -1,5 +1,5 @@
 import { useId, useLayoutEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react'
-import { ArrowUp, FileText, LoaderCircle, Plus, Settings2, X } from 'lucide-react'
+import { ArrowDownLeft, ArrowUp, FileText, LoaderCircle, Plus, Settings2, Sparkles, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import {
@@ -13,11 +13,7 @@ import type { SubmitResearch } from './types'
 
 const MAX_TEXTAREA_HEIGHT = 240
 
-const STARTERS = [
-  { label: 'Explore research', prompt: 'What is currently known about ' },
-  { label: 'Generate hypotheses', prompt: 'Generate testable hypotheses for ' },
-  { label: 'Evaluate evidence', prompt: 'Evaluate the evidence that ' },
-]
+const EXAMPLE_PROMPT = 'Identify the three most promising hypotheses about potential cancer biomarkers and their relationships with cancer treatment response. Propose mechanistic hypotheses explaining relationships. Rank the hypotheses by scientific significance and potential translational impact.'
 
 const isApplePlatform =
   typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.userAgent)
@@ -32,6 +28,7 @@ export function ResearchComposer({ onSubmit }: ResearchComposerProps) {
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [problems, setProblems] = useState<string[]>([])
   const [pending, setPending] = useState(false)
+  const [exampleLoading, setExampleLoading] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [budgetUsd, setBudgetUsd] = useState(25)
   const [budgetTokens, setBudgetTokens] = useState(5_000_000)
@@ -94,15 +91,29 @@ export function ResearchComposer({ onSubmit }: ResearchComposerProps) {
     textareaRef.current?.focus()
   }
 
-  function applyStarter(prompt: string) {
-    const current = STARTERS.find((starter) => question.startsWith(starter.prompt))
-    const next = prompt + (current ? question.slice(current.prompt.length) : question)
-    setQuestion(next)
+  async function useExamplePrompt() {
+    setQuestion(EXAMPLE_PROMPT)
+    setProblems([])
+    setExampleLoading(true)
+    try {
+      const response = await fetch('/examples/Archive.zip')
+      if (!response.ok) throw new Error('The example archive could not be loaded.')
+      const archive = new File([await response.blob()], 'Archive.zip', {
+        type: 'application/zip', lastModified: Date.now(),
+      })
+      const result = addAttachments(attachments, [archive])
+      setAttachments(result.attachments)
+      setProblems(result.problems)
+    } catch {
+      setProblems(['The prompt was added, but Archive.zip could not be attached. You can still attach it using the + button.'])
+    } finally {
+      setExampleLoading(false)
+    }
     requestAnimationFrame(() => {
       const textarea = textareaRef.current
       if (!textarea) return
       textarea.focus()
-      textarea.setSelectionRange(next.length, next.length)
+      textarea.setSelectionRange(EXAMPLE_PROMPT.length, EXAMPLE_PROMPT.length)
     })
   }
 
@@ -253,18 +264,29 @@ export function ResearchComposer({ onSubmit }: ResearchComposerProps) {
         ))}
       </div>
 
-      <div className="mt-4 flex flex-wrap justify-center gap-2">
-        {STARTERS.map((starter) => (
-          <Button
-            key={starter.label}
-            type="button"
-            variant="secondary"
-            className="h-9 rounded-full px-4 text-sm font-medium text-secondary-foreground"
-            onClick={() => applyStarter(starter.prompt)}
-          >
-            {starter.label}
-          </Button>
-        ))}
+      <div className="relative mt-5">
+        <div aria-hidden="true" className="absolute -top-2 left-8 flex size-7 items-center justify-center rounded-full border border-brand/25 bg-background text-brand shadow-sm">
+          <ArrowDownLeft className="size-4" />
+        </div>
+        <section aria-labelledby={`${ids.label}-example-title`} className="overflow-hidden rounded-2xl border border-brand/25 bg-gradient-to-br from-brand/[0.08] via-card to-card p-4 shadow-[0_8px_30px_-18px] shadow-brand/25 sm:p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <span className="flex size-8 items-center justify-center rounded-lg bg-brand/10 text-brand"><Sparkles aria-hidden="true" className="size-4" /></span>
+              <div>
+                <p className="text-[0.6875rem] font-semibold uppercase tracking-[0.12em] text-brand">Example prompt</p>
+                <h2 id={`${ids.label}-example-title`} className="text-sm font-semibold text-foreground">Cancer biomarkers and treatment response</h2>
+              </div>
+            </div>
+              <Button type="button" variant="outline" className="h-9 shrink-0 gap-2 rounded-full border-brand/25 bg-background/80 px-4 text-sm font-medium hover:border-brand/50 hover:bg-brand/5" disabled={exampleLoading || pending} onClick={() => void useExamplePrompt()}>
+              {exampleLoading ? <LoaderCircle aria-hidden="true" className="size-4 motion-safe:animate-spin" /> : null}
+              Use example <ArrowUp aria-hidden="true" className="size-4" />
+            </Button>
+          </div>
+          <p className="mt-3 border-l-2 border-brand/35 pl-3 font-serif text-sm leading-6 text-foreground/85 sm:ml-10 sm:text-[0.9375rem]">
+            {EXAMPLE_PROMPT}
+          </p>
+          <p className="mt-3 text-xs leading-5 text-muted-foreground sm:ml-10"><span className="font-medium text-foreground">Archive.zip</span> is included with this example and will be attached automatically. You can remove it or add more files before submitting.</p>
+        </section>
       </div>
 
       {/* The exact attachment limits live on the attach button's tooltip rather than the hero */}

@@ -255,9 +255,16 @@ type Block =
   | { kind: 'paragraph'; text: string }
   | { kind: 'heading'; level: number; text: string }
   | { kind: 'list'; ordered: boolean; items: ListItem[] }
+  | { kind: 'table'; rows: string[][] }
 
 const BULLET = /^([ \t]*)[-*][ \t]+(.*)$/
 const ORDERED = /^([ \t]*)\d+[.)][ \t]+(.*)$/
+const TABLE_ROW = /^\s*\|.*\|\s*$/
+const TABLE_DIVIDER = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/
+
+function tableCells(line: string): string[] {
+  return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim())
+}
 
 function parseBlocks(source: string): Block[] {
   const blocks: Block[] = []
@@ -273,8 +280,20 @@ function parseBlocks(source: string): Block[] {
     return last?.kind === 'list' && last.ordered === ordered ? last : null
   }
 
-  for (const line of source.split('\n')) {
+  const lines = source.split('\n')
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]
     if (line.trim().length === 0) { flushParagraph(); continue }
+
+    if (TABLE_ROW.test(line) && index + 1 < lines.length && TABLE_DIVIDER.test(lines[index + 1])) {
+      flushParagraph()
+      const rows = [tableCells(line)]
+      index += 2 // Consume the header and Markdown alignment row
+      while (index < lines.length && TABLE_ROW.test(lines[index])) rows.push(tableCells(lines[index++]))
+      index--
+      blocks.push({ kind: 'table', rows })
+      continue
+    }
 
     const heading = /^ {0,3}(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line)
     if (heading) {
@@ -340,6 +359,25 @@ export function ScientificText({ children, onCitationSelect, variant = 'reading'
         if (block.kind === 'heading') {
           const Heading = block.level <= 2 ? 'h3' : 'h4'
           return <Heading key={blockIndex} className="font-sans text-base font-semibold leading-6 text-foreground">{renderInline(block.text, options, `b${blockIndex}`)}</Heading>
+        }
+        if (block.kind === 'table') {
+          const [header = [], ...rows] = block.rows
+          return (
+            <div key={blockIndex} className="overflow-x-auto rounded-lg border border-border">
+              <table className="w-full min-w-[42rem] border-collapse text-left text-sm">
+                <thead className="bg-muted/60 text-xs font-medium text-muted-foreground">
+                  <tr>{header.map((cell, cellIndex) => <th key={cellIndex} scope="col" className="border-b border-border px-3 py-2.5">{renderInline(cell, options, `b${blockIndex}h${cellIndex}`)}</th>)}</tr>
+                </thead>
+                <tbody className="divide-y divide-border/70">
+                  {rows.map((row, rowIndex) => (
+                    <tr key={rowIndex} className="align-top hover:bg-muted/20">
+                      {header.map((_, cellIndex) => <td key={cellIndex} className="px-3 py-2.5 text-foreground/85">{renderInline(row[cellIndex] ?? '', options, `b${blockIndex}r${rowIndex}c${cellIndex}`)}</td>)}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
         }
         const List = block.ordered ? 'ol' : 'ul'
         return (
