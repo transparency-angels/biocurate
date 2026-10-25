@@ -17,6 +17,7 @@ const TABS = [
 // Data and Sources scroll inside the panel on desktop only. Below `lg` the panel
 // stacks under the list and the page scrolls, so touch never meets a nested scroller.
 const scrollPanel = 'lg:max-h-[32rem] lg:overflow-y-auto lg:overscroll-contain'
+const sourcesScrollPanel = 'lg:max-h-[48rem] lg:overflow-y-auto lg:overscroll-contain'
 
 interface HypothesisTabsProps {
   id: string
@@ -61,7 +62,7 @@ export function HypothesisTabs({ id, hypothesis, total, activeTab, onTabChange }
         <Tabs.Content key={`data-${hypothesis.id}`} value="data" className={cn(contentClass, scrollPanel)}>
           <DataTab hypothesis={hypothesis} />
         </Tabs.Content>
-        <Tabs.Content key={`sources-${hypothesis.id}`} value="sources" className={cn(contentClass, scrollPanel)}>
+        <Tabs.Content key={`sources-${hypothesis.id}`} value="sources" className={cn(contentClass, sourcesScrollPanel)}>
           <SourcesTab hypothesis={hypothesis} />
         </Tabs.Content>
       </Tabs.Root>
