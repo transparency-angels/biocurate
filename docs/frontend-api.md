@@ -173,14 +173,67 @@ The ranked hypotheses, already in the `ResearchSession` shape from
       "summary": "One-line summary",
       "abstract": "First paragraph of the full text",
       "explanation": "The remaining paragraphs",
+      "state": "in_tournament",
+      "createdAt": "2026-10-25T10:00:00.000Z",
+      "elo": 1245.5,
+      "matchesPlayed": 4,
+      "candidateKey": "KRAS|mutation|FLUOROURACIL",
+      "dataEvidence": { "candidate_key": "KRAS|mutation|FLUOROURACIL", "delta_os_months": -4.2 },
       "dataSummary": {
         "description": "KRAS mutation and survival on FLUOROURACIL (Δ median OS -4.2 months, p = 0.003, n = 412)",
         "metric": "os_months",
         "unit": "months"
       },
       "dataPoints": [
-        { "id": "S1", "label": "S1", "group": "altered", "value": 12.4 }
+        { "id": "S1", "label": "S1", "group": "altered", "value": 12.4, "event": true }
       ],
+      "dataAnalysis": {
+        "kind": "survival",
+        "status": "supported",
+        "headline": "KRAS mutation is significantly associated with reduced overall survival on Fluorouracil.",
+        "endpoint": { "label": "Overall Survival", "unit": "months" },
+        "groups": [
+          { "group": "altered", "label": "Altered (mutated)", "n": 142, "events": 98, "censored": 44, "median": 12.4 },
+          { "group": "unaltered", "label": "Wild type", "n": 270, "events": 162, "censored": 108, "median": 16.6 }
+        ],
+        "effect": {
+          "medianDifference": -4.2,
+          "hazardRatio": 1.48,
+          "hazardRatioLower": 1.15,
+          "hazardRatioUpper": 1.91,
+          "direction": "worse"
+        },
+        "significance": {
+          "pValue": 0.003,
+          "qValue": 0.018,
+          "alpha": 0.05,
+          "testsRun": 120
+        },
+        "curves": [
+          {
+            "group": "altered",
+            "label": "Altered",
+            "steps": [{ "t": 0, "s": 1.0, "lower": 1.0, "upper": 1.0 }, { "t": 6, "s": 0.82, "lower": 0.75, "upper": 0.87 }],
+            "censored": [14.2, 22.1]
+          }
+        ],
+        "atRisk": [
+          { "t": 0, "altered": 142, "unaltered": 270 },
+          { "t": 12, "altered": 72, "unaltered": 184 }
+        ],
+        "caveats": [
+          {
+            "level": "info",
+            "text": "Analysis does not adjust for prior line therapies.",
+            "action": "Stratify by treatment line if clinical data permits."
+          }
+        ],
+        "methods": [
+          { "label": "Survival model", "value": "Kaplan-Meier with log-rank test" },
+          { "label": "Multiple testing correction", "value": "Benjamini-Hochberg FDR (q ≤ 0.05)" }
+        ],
+        "relatedFindings": []
+      },
       "sources": [
         {
           "id": "hyp_...-s1",
@@ -203,15 +256,28 @@ Notes:
   counts from 1). Before any tournament exists, reviewed hypotheses are shown too.
 - `dataSummary` is empty strings and `dataPoints` is `[]` for a hypothesis with no
   linked dataset result.
+- `dataPoints` entries carry `event: boolean | null` indicating whether the sample
+  reached the endpoint (`true`) or was right-censored (`false`).
+- `dataAnalysis` is always provided on each hypothesis. If no dataset is linked, its
+  `kind` is `"none"` and `status` is `"not_tested"`. When an exploratory tabular dataset
+  is present, `kind` is `"exploratory"`. For clinical biomarker associations, `kind` is
+  `"survival"` and provides full KM curves, Greenwood 95% confidence intervals, and
+  at-risk timelines.
 - A source cited from an uploaded file has `url: null`, `publication` set to the
   file name, and `evidenceType: "Dataset"` when the file was tabular.
 - `url` is `null` whenever the stored link is not a real `http(s)` URL.
 - `isDemo` is always `false` here.
 
 For the live progress view, `include_drafts=true` includes hypotheses as soon as
-Generation saves them, before Reflection has reviewed them. Each hypothesis has a
-`state` (`draft`, `reviewed`, `in_tournament`, `pinned`, etc.). The default remains
-the ranked results view and omits unreviewed drafts.
+Generation saves them, before Reflection has reviewed them. When `include_drafts=true`
+is requested, each hypothesis additionally exposes:
+- `state`: `"draft"`, `"reviewed"`, `"in_tournament"`, `"pinned"`, `"rejected"`,
+  `"quarantined"`, or `"retired"`.
+- `createdAt`: ISO 8601 string.
+- `elo`: dynamic Elo rating (float or `null`).
+- `matchesPlayed`: tournament matches played count.
+- `candidateKey`: candidate association identifier (e.g. `KRAS|mutation|FLUOROURACIL`).
+- `dataEvidence`: stored empirical biomarker evidence dictionary.
 
 Errors: 404 `session not found`.
 
@@ -285,29 +351,77 @@ There is no overview until the session finishes meta-review.
 
 ### `GET /api/sessions/{id}/analysis`
 
-The data-analysis report (Kaplan-Meier and log-rank biomarker screen). It exists
-only when the session had a usable tabular attachment.
+The dataset profiling and statistical analysis report. It exists when the session
+had a usable tabular attachment. Supports both clinical biomarker survival screens
+(`profile_type: "survival"`) and generic tabular exploratory analyses
+(`profile_type: "exploratory_tabular"`).
 
 ```json
 {
+  "profile_type": "survival",
+  "sample_count": 412,
+  "generated_at": "2026-10-24T18:01:02+00:00",
+  "created_at": "2026-10-24T18:01:03+00:00",
+  "drugs": ["FLUOROURACIL"],
   "candidates": [
     {
       "candidate_key": "KRAS|mutation|FLUOROURACIL",
       "biomarker": "KRAS",
       "alteration_type": "mutation",
       "drug": "FLUOROURACIL",
-      "p_value": 0.003
+      "p_value": 0.003,
+      "hazard_ratio": 1.48,
+      "delta_os_months": -4.2,
+      "sample_size": 412,
+      "median_surv_altered": 12.4,
+      "median_surv_unaltered": 16.6,
+      "cohort_sizes": { "altered": 142, "unaltered": 270 }
     }
   ],
-  "drugs": ["FLUOROURACIL"],
-  "sample_count": 412,
-  "generated_at": "2026-10-24T18:01:02+00:00",
-  "created_at": "2026-10-24T18:01:03+00:00",
-  "endpoint": { "...": "which duration and event columns were used" },
-  "survival_curves": [ { "...": "per-plot curve data" } ],
-  "tests": [ { "...": "one row per tested comparison" } ],
-  "tests_truncated": true,
-  "tests_total": 5400,
+  "survival_curves": [
+    {
+      "association": {
+        "candidate_key": "KRAS|mutation|FLUOROURACIL",
+        "biomarker": "KRAS",
+        "alteration_type": "mutation",
+        "drug": "FLUOROURACIL"
+      },
+      "altered": {
+        "timeline": [0.0, 6.0, 12.0, 24.0],
+        "survival_probability": [1.0, 0.82, 0.51, 0.22],
+        "ci_lower": [1.0, 0.75, 0.43, 0.15],
+        "ci_upper": [1.0, 0.87, 0.59, 0.31],
+        "at_risk": [142, 116, 72, 31]
+      },
+      "unaltered": {
+        "timeline": [0.0, 6.0, 12.0, 24.0],
+        "survival_probability": [1.0, 0.91, 0.68, 0.38],
+        "ci_lower": [1.0, 0.87, 0.62, 0.32],
+        "ci_upper": [1.0, 0.94, 0.73, 0.44],
+        "at_risk": [270, 245, 184, 102]
+      },
+      "log_rank": { "p_value": 0.003, "test_statistic": 8.81 },
+      "hazard_ratio": 1.48
+    }
+  ],
+  "points": {
+    "KRAS|mutation|FLUOROURACIL": {
+      "metric": "os_months",
+      "unit": "months",
+      "points": [
+        { "id": "S1", "label": "S1", "group": "altered", "value": 12.4, "event": true },
+        { "id": "S2", "label": "S2", "group": "unaltered", "value": 18.2, "event": false }
+      ]
+    },
+    "KRAS|mutation|FLUOROURACIL|km": {
+      "metric": "kaplan_meier",
+      "unit": "probability",
+      "points": [
+        { "time": 0.0, "survival_probability": 1.0, "ci_lower": 1.0, "ci_upper": 1.0, "at_risk": 142, "group": "altered" },
+        { "time": 6.0, "survival_probability": 0.82, "ci_lower": 0.75, "ci_upper": 0.87, "at_risk": 116, "group": "altered" }
+      ]
+    }
+  },
   "summary_markdown": "# Dataset analysis\n...",
   "plots": [
     {
@@ -315,14 +429,30 @@ only when the session had a usable tabular attachment.
       "content_type": "image/png",
       "url": "/api/sessions/ses_.../plots/kaplan_meier_1"
     }
-  ]
+  ],
+  "tests": [ { "...": "tested comparisons" } ],
+  "tests_truncated": true,
+  "tests_total": 5400
 }
 ```
 
-The candidate entries carry more statistics than shown (medians, counts and so
-on); the example lists only the fields the rest of the API relies on. `tests` is
-capped to keep the document small; when it was cut, `tests_truncated` is `true`
-and `tests_total` is the full count (both fields are absent otherwise).
+When `profile_type` is `"exploratory_tabular"` (arbitrary numeric / categorical data without survival endpoints):
+- `candidates` and `survival_curves` are omitted or empty.
+- Instead, the response includes:
+  - `group_comparisons`: list of Welch's t-test / Mann-Whitney comparisons across feature groupings.
+  - `group_comparisons_total`: total number of group combinations tested.
+  - `correlations`: pairwise Spearman / Pearson correlations.
+  - `selection`: `{ "group_comparisons": N }`.
+
+The `points` dictionary contains two primary types of coordinate series:
+1. Individual sample observations (`candidate_key`, e.g. `"KRAS|mutation|FLUOROURACIL"`):
+   - `metric`: e.g. `"os_months"`.
+   - `unit`: e.g. `"months"`.
+   - `points`: list of individual patient / sample points with `id`, `group` (`"altered"` / `"unaltered"`), `value`, and `event` (`true` for event observed, `false` for censored).
+2. Discrete Kaplan-Meier step coordinates (`candidate_key + "|km"`, e.g. `"KRAS|mutation|FLUOROURACIL|km"`):
+   - `metric`: `"kaplan_meier"`.
+   - `unit`: `"probability"`.
+   - `points`: discrete step coordinates with `time`, `survival_probability`, `ci_lower` (Greenwood 95% CI), `ci_upper`, `at_risk`, and `group`.
 
 Each plot gets a ready-made `url`. Use it directly as an image source.
 
@@ -403,8 +533,66 @@ Open it with `EventSource`. It sends two kinds of events.
 `session_paused`, `session_resumed`, `session_aborted`, `session_done`,
 `human_feedback`. On connect, the last 25 stored events are replayed (shape
 `ReplayEventData`), then live events follow (shape `LiveEventData`, the bus
-envelope). This is the behaviour `frontend/src/types/researchEvents.ts` already
-describes.
+envelope). This is the behaviour `frontend/src/types/researchEvents.ts` describes.
+
+### Progressive Agent Lifecycle & Tournament Events
+
+In addition to supervisor-level task events, the agents emit domain events directly
+to the event bus and persistent event store as hypotheses progress through the pipeline:
+
+1. `hypothesis_generated`: Emitted by Generation and Evolution agents as soon as a
+   draft hypothesis is persisted (`state: "draft"`):
+   ```json
+   {
+     "hypothesis_id": "hyp_01j...",
+     "id": "hyp_01j...",
+     "session_id": "ses_01j...",
+     "title": "Loss of KEAP1 sensitizes to Cisplatin",
+     "summary": "Full or one-sentence summary of the proposed mechanism",
+     "state": "draft",
+     "strategy": "literature",
+     "created_by": "generation",
+     "parent_ids": [],
+     "elo": 1200.0,
+     "matches_played": 0
+   }
+   ```
+2. `hypothesis_reviewed`: Emitted by the Reflection agent once multi-criterion evaluation
+   completes (`state: "reviewed"`):
+   ```json
+   {
+     "hypothesis_id": "hyp_01j...",
+     "state": "reviewed",
+     "verdict": "accept",
+     "scores": {
+       "novelty": 8.0,
+       "correctness": 8.5,
+       "testability": 9.0,
+       "feasibility": 7.5
+     }
+   }
+   ```
+3. `match_completed` (and `match_complete`): Emitted by the Ranking agent after each
+   head-to-head tournament match:
+   ```json
+   {
+     "match_id": "mat_01j...",
+     "round": 2,
+     "hyp_a": "hyp_01j...",
+     "hyp_b": "hyp_02j...",
+     "winner": "hyp_01j...",
+     "winner_id": "hyp_01j...",
+     "loser_id": "hyp_02j...",
+     "mode": "co_scientist",
+     "rationale": "Full LLM judge critique...",
+     "rationale_snippet": "First 120 characters of judge rationale...",
+     "elo_a_before": 1200.0,
+     "elo_b_before": 1200.0,
+     "elo_a_after": 1216.0,
+     "elo_b_after": 1184.0,
+     "elo_applied": true
+   }
+   ```
 
 ### `timeline_message` events (new, different shape)
 
@@ -522,26 +710,71 @@ export interface AnalysisCandidate {
   biomarker: string
   alteration_type: string
   drug: string
-  /** null when the test statistic was not finite */
   p_value: number | null
+  hazard_ratio?: number
+  delta_os_months?: number
+  sample_size?: number
+  median_surv_altered?: number
+  median_surv_unaltered?: number
+  cohort_sizes?: { altered?: number; unaltered?: number }
   [stat: string]: unknown
 }
 
+export interface KmDataPoint {
+  time: number
+  survival_probability: number
+  ci_lower?: number | null
+  ci_upper?: number | null
+  at_risk?: number
+  group: 'altered' | 'unaltered' | string
+}
+
+export interface SurvivalCurveData {
+  association?: {
+    candidate_key?: string
+    biomarker?: string
+    alteration_type?: string
+    drug?: string
+  }
+  altered?: {
+    timeline?: number[]
+    survival_probability?: number[]
+    ci_lower?: (number | null)[]
+    ci_upper?: (number | null)[]
+    at_risk?: number[]
+  }
+  unaltered?: {
+    timeline?: number[]
+    survival_probability?: number[]
+    ci_lower?: (number | null)[]
+    ci_upper?: (number | null)[]
+    at_risk?: number[]
+  }
+  log_rank?: {
+    p_value?: number
+    test_statistic?: number
+  }
+  hazard_ratio?: number
+}
+
 export interface AnalysisReport {
-  candidates: AnalysisCandidate[]
-  drugs: string[]
-  sample_count: number
-  generated_at: string
-  /** When the report was stored (ISO 8601) */
-  created_at: string
-  endpoint: Record<string, unknown>
-  survival_curves: Record<string, unknown>[]
-  tests: Record<string, unknown>[]
-  /** Present only when `tests` was cut down */
+  sample_count?: number
+  generated_at?: string
+  created_at?: string
+  summary_markdown?: string
+  profile_type?: 'survival' | 'exploratory_tabular' | string
+  group_comparisons?: unknown[]
+  group_comparisons_total?: number
+  selection?: { group_comparisons?: number }
+  correlations?: unknown[]
+  candidates?: AnalysisCandidate[]
+  plots?: AnalysisPlot[]
+  survival_curves?: SurvivalCurveData[]
+  points?: Record<string, { metric: string; unit: string; points: any[] }>
+  endpoint?: Record<string, unknown>
+  tests?: Record<string, unknown>[]
   tests_truncated?: boolean
   tests_total?: number
-  summary_markdown: string
-  plots: AnalysisPlot[]
 }
 ```
 
@@ -567,3 +800,53 @@ the old `.gitignore` rule `data/`, which ignored any folder named `data`. The
 rule is now anchored to the repo root (`/data/`), which is the runtime data
 folder only. Commit `frontend/src/data/mock*.ts` now; a fresh clone will not
 build without them.
+
+---
+
+## 10. Three Views Frontend Architecture & Integration Guide
+
+The frontend provides three synchronized views for exploring live and completed research sessions:
+
+### 10.1 Overview View (`/research/:id/overview`, `ResearchOverview.tsx`)
+- **Progressive Lifecycle:** Shows hypotheses from initial drafting through tournament play.
+  When connected via `?include_drafts=true` and listening to SSE, hypotheses render immediately
+  upon creation:
+  - `Draft`: Just generated by Generation or Evolution agent, awaiting reflection review.
+  - `Reviewed`: Evaluated by Reflection agent with quality criteria scores.
+  - `In Tournament`: Active in head-to-head Elo tournament rounds.
+  - `Pinned`: Preserved by user directive or top rank.
+- **Dynamic Elo Leaderboard:**
+  - Upon receiving `match_completed` events, updates Elo ratings (`elo_a_after`, `elo_b_after`)
+    and match counts in real time.
+  - Client-side deduplication prevents UI flicker during reconnects.
+- **Final Research Overview:** When the meta-review agent finishes, displays the full synthesized
+  narrative, executive summary, and recommendations alongside the top-ranked hypotheses.
+
+### 10.2 Data View (`/research/:id/data`, `ResearchData.tsx` & `DataTab.tsx`)
+- **Interactive Kaplan-Meier Curves:**
+  - Fetches discrete coordinates from `GET /api/sessions/:id/analysis` via `points["{candidate}|km"]`.
+  - Renders stepped survival curves, Greenwood 95% confidence intervals, and right-censoring tick marks
+    interactively in SVG, replacing static raster plots.
+  - Displays synchronous at-risk numbers below the time axis.
+- **Biomarker Survival Statistics:**
+  - Key figures: Difference in median survival ($\Delta$ OS months), Hazard Ratio with 95% CI,
+    log-rank $p$-value, and FDR-corrected $q$-value across tested candidates.
+- **Generic Tabular Support:**
+  - For non-survival datasets (`profile_type: "exploratory_tabular"`), presents group comparison
+    distributions (Welch's t-test / Mann-Whitney) and feature correlations.
+- **Hypothesis Linking:**
+  - Navigating to `/research/:id/data?candidate={key}` or `?hypothesis={id}` automatically highlights
+    the relevant biomarker and associated survival curves.
+  - Allows exporting raw sample data points to CSV.
+
+### 10.3 Source View (`/research/:id/sources`, `ResearchSources.tsx` & `SourcesTab.tsx`)
+- **Passage-Level Grounding:**
+  - Displays cited literature with passage snippets and specific anchor tags (e.g., `PMC8801234#paragraph-3`
+    or `PMC8801234#F2`).
+  - Provides direct outbound links to Europe PMC, PubMed, and open-access publisher DOIs.
+- **Evidence Classification & Verification:**
+  - Renders evidence type badges (`Clinical study`, `Dataset`, `Review`, `Experimental study`).
+  - Shows verification status indicators based on fact-checking passes.
+- **Cross-Hypothesis Traceability:**
+  - Lists every hypothesis that cites each paper, enabling researchers to inspect how literature
+    findings influenced multiple hypotheses.
