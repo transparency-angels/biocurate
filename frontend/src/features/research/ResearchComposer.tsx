@@ -1,4 +1,4 @@
-import { useId, useLayoutEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react'
+import { useId, useLayoutEffect, useRef, useState, type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { ArrowDownLeft, ArrowUp, FileText, LoaderCircle, Plus, Settings2, Sparkles, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -26,6 +26,7 @@ export function ResearchComposer({ onSubmit }: ResearchComposerProps) {
   const [pending, setPending] = useState(false)
   const [exampleLoading, setExampleLoading] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsPosition, setSettingsPosition] = useState<{ left: number; top: number } | null>(null)
   const [budgetUsd, setBudgetUsd] = useState(25)
   const [budgetTokens, setBudgetTokens] = useState(5_000_000)
   const [wallClockMinutes, setWallClockMinutes] = useState(10)
@@ -33,6 +34,9 @@ export function ResearchComposer({ onSubmit }: ResearchComposerProps) {
 
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const settingsRef = useRef<HTMLDivElement>(null)
+  const settingsButtonRef = useRef<HTMLButtonElement>(null)
+  const settingsPanelRef = useRef<HTMLElement>(null)
   const ids = { label: useId(), hint: useId(), problems: useId() }
 
   const canSubmit = question.trim().length > 0 && !pending
@@ -44,6 +48,55 @@ export function ResearchComposer({ onSubmit }: ResearchComposerProps) {
     textarea.style.height = 'auto'
     textarea.style.height = `${Math.min(textarea.scrollHeight, MAX_TEXTAREA_HEIGHT)}px`
   }, [question])
+
+  useLayoutEffect(() => {
+    if (!settingsOpen) return
+    function closeOnOutsidePointer(event: PointerEvent) {
+      if (event.target instanceof Node && !settingsRef.current?.contains(event.target)) {
+        setSettingsOpen(false)
+      }
+    }
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') setSettingsOpen(false)
+    }
+    document.addEventListener('pointerdown', closeOnOutsidePointer)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointer)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [settingsOpen])
+
+  useLayoutEffect(() => {
+    if (!settingsOpen) {
+      setSettingsPosition(null)
+      return
+    }
+    const placePanel = () => {
+      const button = settingsButtonRef.current
+      const panel = settingsPanelRef.current
+      if (!button || !panel) return
+      const anchor = button.getBoundingClientRect()
+      const panelBox = panel.getBoundingClientRect()
+      const margin = 12
+      const left = Math.max(margin, Math.min(anchor.left, window.innerWidth - panelBox.width - margin))
+      const above = anchor.top - panelBox.height - 8
+      const below = anchor.bottom + 8
+      const top = above >= margin
+        ? above
+        : below + panelBox.height <= window.innerHeight - margin
+          ? below
+          : Math.max(margin, Math.min(above, window.innerHeight - panelBox.height - margin))
+      setSettingsPosition({ left, top })
+    }
+    placePanel()
+    window.addEventListener('resize', placePanel)
+    window.addEventListener('scroll', placePanel, true)
+    return () => {
+      window.removeEventListener('resize', placePanel)
+      window.removeEventListener('scroll', placePanel, true)
+    }
+  }, [settingsOpen])
 
   async function submit() {
     if (!canSubmit) return
@@ -65,7 +118,7 @@ export function ResearchComposer({ onSubmit }: ResearchComposerProps) {
     }
   }
 
-  function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+  function handleKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
     // Enter submits; Shift+Enter inserts a newline. Keep Ctrl/⌘+Enter as an alternate shortcut.
     if (
       event.key === 'Enter' &&
@@ -159,9 +212,9 @@ export function ResearchComposer({ onSubmit }: ResearchComposerProps) {
           </ul>
         )}
 
-        <div className="relative flex items-end gap-2">
+        <div ref={settingsRef} className="relative flex items-end gap-2">
           {settingsOpen && (
-            <section aria-label="Co-Scientist run settings" className="absolute bottom-full left-0 z-20 mb-3 w-[min(26rem,calc(100vw-3rem))] rounded-2xl border border-border bg-popover p-4 text-popover-foreground shadow-xl ring-1 ring-black/5 sm:p-5">
+            <section ref={settingsPanelRef} aria-label="Co-Scientist run settings" className="fixed z-50 max-h-[calc(100dvh-1.5rem)] w-[min(26rem,calc(100vw-3rem))] overflow-y-auto rounded-2xl border border-border bg-popover p-4 text-popover-foreground shadow-xl ring-1 ring-black/5 sm:p-5" style={{ left: settingsPosition?.left ?? 12, top: settingsPosition?.top ?? 12, visibility: settingsPosition ? 'visible' : 'hidden' }}>
               <div className="mb-4 flex items-start gap-3 border-b border-border pb-3">
                 <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-secondary text-foreground"><Settings2 aria-hidden="true" className="size-4" /></span>
                 <div className="min-w-0 flex-1">
@@ -215,6 +268,7 @@ export function ResearchComposer({ onSubmit }: ResearchComposerProps) {
           </Button>
 
           <Button
+            ref={settingsButtonRef}
             type="button"
             variant="ghost"
             size="icon-lg"
