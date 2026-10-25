@@ -1,14 +1,9 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
-import { Link } from 'react-router'
-import { ArrowRight, Clock3 } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { lazy, Suspense } from 'react'
 import { BioCurateWordmark } from '@/components/brand/BioCurateWordmark'
 import { WhatWeOffer } from '@/components/home/WhatWeOffer'
 import { ResearchComposer } from '@/features/research/ResearchComposer'
 import type { SubmitResearch } from '@/features/research/types'
 import { useDocumentTitle } from '@/lib/useDocumentTitle'
-import { readCurrentSession, subscribeCurrentSession, type CurrentSession } from '@/features/research/currentSession'
-import { getSession } from '@/services/api'
 
 // Loaded separately so the particle engine never delays the first paint of the prompt
 const MolecularBackground = lazy(() => import('@/components/background/MolecularBackground'))
@@ -18,20 +13,6 @@ interface HomePageProps {
 }
 
 export function HomePage({ onSubmitResearch }: HomePageProps) {
-  const [currentSession, setCurrentSession] = useState<CurrentSession | null>(null)
-  useEffect(() => {
-    let active = true
-    const refresh = () => {
-      const stored = readCurrentSession()
-      setCurrentSession(stored)
-      if (stored) void getSession(stored.id).then((session) => {
-        if (active && readCurrentSession()?.id === stored.id) setCurrentSession({ ...stored, question: session.research_goal })
-      }).catch(() => undefined)
-    }
-    refresh()
-    const unsubscribe = subscribeCurrentSession(refresh)
-    return () => { active = false; unsubscribe() }
-  }, [])
   useDocumentTitle()
 
   return (
@@ -52,20 +33,6 @@ export function HomePage({ onSubmitResearch }: HomePageProps) {
           </p>
 
           <div className="mt-8 w-full">
-            {currentSession && (
-              <section className="mb-4 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-border bg-card/90 px-4 py-3.5 text-left shadow-sm backdrop-blur-sm sm:px-5">
-                <div className="flex min-w-0 items-start gap-3">
-                  <Clock3 aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-brand" />
-                  <div className="min-w-0">
-                    <p className="text-xs font-medium text-muted-foreground">Your recent research</p>
-                    <p className="mt-1 line-clamp-2 text-sm leading-5 text-foreground">{currentSession.question ?? 'Open your latest research session.'}</p>
-                  </div>
-                </div>
-                <Button asChild variant="outline" className="h-9 shrink-0 gap-2 rounded-full px-3.5">
-                  <Link to={`/research/${currentSession.id}/chat`}>Continue<ArrowRight aria-hidden="true" className="size-4" /></Link>
-                </Button>
-              </section>
-            )}
             <ResearchComposer onSubmit={onSubmitResearch} />
           </div>
         </div>

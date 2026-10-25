@@ -15,10 +15,6 @@ const MAX_TEXTAREA_HEIGHT = 240
 
 const EXAMPLE_PROMPT = 'Identify the three most promising hypotheses about potential cancer biomarkers and their relationships with cancer treatment response. Propose mechanistic hypotheses explaining relationships. Rank the hypotheses by scientific significance and potential translational impact.'
 
-const isApplePlatform =
-  typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.userAgent)
-const SUBMIT_SHORTCUT = isApplePlatform ? '⌘ + Enter' : 'Ctrl + Enter'
-
 interface ResearchComposerProps {
   onSubmit: SubmitResearch
 }
@@ -70,8 +66,13 @@ export function ResearchComposer({ onSubmit }: ResearchComposerProps) {
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    // Enter alone inserts a new line; Ctrl/⌘ + Enter submits
-    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing) {
+    // Enter submits; Shift+Enter inserts a newline. Keep Ctrl/⌘+Enter as an alternate shortcut.
+    if (
+      event.key === 'Enter' &&
+      !event.shiftKey &&
+      !event.nativeEvent.isComposing &&
+      !event.repeat
+    ) {
       event.preventDefault()
       void submit()
     }
@@ -277,7 +278,7 @@ export function ResearchComposer({ onSubmit }: ResearchComposerProps) {
                 <h2 id={`${ids.label}-example-title`} className="text-sm font-semibold text-foreground">Cancer biomarkers and treatment response</h2>
               </div>
             </div>
-              <Button type="button" variant="outline" className="h-9 shrink-0 gap-2 rounded-full border-brand/25 bg-background/80 px-4 text-sm font-medium hover:border-brand/50 hover:bg-brand/5" disabled={exampleLoading || pending} onClick={() => void useExamplePrompt()}>
+              <Button type="button" variant="outline" className="h-9 shrink-0 gap-2 rounded-full border-2 border-amber-500 bg-background px-4 text-sm font-semibold text-amber-800 shadow-[0_0_0_3px_rgba(245,158,11,0.12)] transition-colors hover:border-amber-600 hover:bg-amber-50 dark:text-amber-300 dark:hover:bg-amber-950/40" disabled={exampleLoading || pending} onClick={() => void useExamplePrompt()}>
               {exampleLoading ? <LoaderCircle aria-hidden="true" className="size-4 motion-safe:animate-spin" /> : null}
               Use example <ArrowUp aria-hidden="true" className="size-4" />
             </Button>
@@ -291,7 +292,7 @@ export function ResearchComposer({ onSubmit }: ResearchComposerProps) {
 
       {/* The exact attachment limits live on the attach button's tooltip rather than the hero */}
       <p id={ids.hint} className="mt-4 text-center text-[0.8125rem] leading-5 text-faint">
-        Attach research files, or submit with <kbd className="font-sans">{SUBMIT_SHORTCUT}</kbd>.
+        Enter to submit · Shift + Enter for a new line · Attach research files.
       </p>
     </div>
   )
