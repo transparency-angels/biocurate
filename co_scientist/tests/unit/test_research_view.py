@@ -159,3 +159,19 @@ def test_library_pmcid_parses_passage_urls_only() -> None:
     assert rv.library_pmcid("https://europepmc.org/article/PMC/PMC42#F1") == "PMC42"
     assert rv.library_pmcid("https://example.org/PMC42") is None
     assert rv.library_pmcid("upload://att_1#p1") is None
+
+
+def test_include_drafts_populates_state_and_matches() -> None:
+    h1 = _hyp("draft1", state="draft", elo=None)
+    h2 = _hyp("rev1", state="reviewed", elo=1150.0)
+    h3 = _hyp("tour1", state="in_tournament", elo=1250.0)
+    session = rv.to_research_session("ses_x", [h1, h2, h3], None, {}, include_drafts=True)
+    assert len(session["hypotheses"]) == 3
+    by_title = {h["title"]: h for h in session["hypotheses"]}
+    assert by_title["draft1"]["state"] == "draft"
+    assert by_title["draft1"]["rank"] == 3
+    assert by_title["draft1"]["matchesPlayed"] == 0
+    assert by_title["rev1"]["state"] == "reviewed"
+    assert by_title["rev1"]["elo"] == 1150.0
+    assert by_title["tour1"]["state"] == "in_tournament"
+    assert by_title["tour1"]["rank"] == 1

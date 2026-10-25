@@ -1241,6 +1241,8 @@ async def test_fetch_points_returns_only_requested_keys(any_conn) -> None:
     assert set(got) == {"A|mutation|D", "C|deletion|D"}
     assert got["A|mutation|D"] == {"metric": "PFS", "unit": "months", "points": pts * 2}
     assert await repo.fetch_points(any_conn, "ses_an", []) == {}
+    all_pts = await repo.fetch_points(any_conn, "ses_an")
+    assert set(all_pts) == {"A|mutation|D", "B|mutation|D", "C|deletion|D"}
 
 
 @pytest.mark.asyncio

@@ -358,6 +358,28 @@ async def test_research_excludes_rejected_and_quarantined(api_cfg) -> None:
     assert [h["title"] for h in body["hypotheses"]] == ["keep"]
 
 
+async def test_research_includes_drafts_and_reviewed(api_cfg) -> None:
+    sid = await _make_session(api_cfg)
+    conn = await db_mod.connect(api_cfg)
+    try:
+        await _add_hyp(conn, sid, "keep", state="in_tournament", elo=1200.0)
+        await _add_hyp(conn, sid, "draft_hyp", state="draft", elo=None)
+        await _add_hyp(conn, sid, "reviewed_hyp", state="reviewed", elo=1100.0)
+        await _add_hyp(conn, sid, "rejected_hyp", state="rejected", elo=1300.0)
+    finally:
+        await conn.close()
+    async with _client(api_cfg) as c:
+        body = (await c.get(f"/api/sessions/{sid}/research?include_drafts=true")).json()
+    titles = [h["title"] for h in body["hypotheses"]]
+    assert "keep" in titles
+    assert "draft_hyp" in titles
+    assert "reviewed_hyp" in titles
+    assert "rejected_hyp" not in titles
+    hyp_map = {h["title"]: h for h in body["hypotheses"]}
+    assert hyp_map["draft_hyp"]["state"] == "draft"
+    assert hyp_map["reviewed_hyp"]["state"] == "reviewed"
+
+
 async def test_research_loads_only_linked_points(
     api_cfg, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -478,6 +500,28 @@ async def test_analysis_route_hides_blob_ids(tmp_cfg) -> None:
                               "url": f"/api/sessions/{sid}/plots/kaplan_meier_1"}]
     assert "blob_id" not in r.text
     assert missing.status_code == 404
+
+
+async def test_analysis_route_serves_points_and_survival_curves(tmp_cfg) -> None:
+    sid = await _seed_report(tmp_cfg)
+    conn = await db_mod.connect(tmp_cfg)
+    try:
+        await analysis_repo.save_points(
+            conn, sid, "TP53|mutation|CISPLATIN",
+            metric="os_months", unit="months",
+            points=[{"sample_id": "S1", "group": "altered", "value": 4.5}],
+        )
+    finally:
+        await conn.close()
+    async with _client(tmp_cfg) as c:
+        r = await c.get(f"/api/sessions/{sid}/analysis")
+    assert r.status_code == 200
+    body = r.json()
+    assert "points" in body
+    assert "TP53|mutation|CISPLATIN" in body["points"]
+    assert body["points"]["TP53|mutation|CISPLATIN"]["points"] == [
+        {"sample_id": "S1", "group": "altered", "value": 4.5}
+    ]
 
 
 async def test_plots_route_streams_png_and_404s_unknown(tmp_cfg) -> None:

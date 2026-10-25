@@ -232,6 +232,29 @@ async def test_events_stream_still_carries_other_bus_events(tmp_cfg) -> None:
     assert json.loads(ev["data"])["payload"] == {"x": 1}
 
 
+async def test_events_stream_carries_hypothesis_lifecycle_and_match_events(tmp_cfg) -> None:
+    sid = await _make_session(tmp_cfg)
+    async with _SSE(tmp_cfg, f"/api/sessions/{sid}/events") as sse:
+        for _ in range(100):
+            if GLOBAL_BUS.subscriber_count(sid):
+                break
+            await asyncio.sleep(0.01)
+        await GLOBAL_BUS.publish(sid, "hypothesis_generated", {"hypothesis_id": "hyp_1", "state": "draft"})
+        ev1 = await sse.next_event()
+        assert ev1["event"] == "hypothesis_generated"
+        assert json.loads(ev1["data"])["payload"]["hypothesis_id"] == "hyp_1"
+
+        await GLOBAL_BUS.publish(sid, "hypothesis_reviewed", {"hypothesis_id": "hyp_1", "state": "reviewed"})
+        ev2 = await sse.next_event()
+        assert ev2["event"] == "hypothesis_reviewed"
+        assert json.loads(ev2["data"])["payload"]["state"] == "reviewed"
+
+        await GLOBAL_BUS.publish(sid, "match_completed", {"winner_id": "hyp_1", "loser_id": "hyp_2"})
+        ev3 = await sse.next_event()
+        assert ev3["event"] == "match_completed"
+        assert json.loads(ev3["data"])["payload"]["winner_id"] == "hyp_1"
+
+
 async def test_disconnect_closes_watcher_bus_and_connection(
     tmp_cfg, monkeypatch: pytest.MonkeyPatch
 ) -> None:

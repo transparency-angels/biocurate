@@ -537,7 +537,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             )
             keys = research_view.linked_candidate_keys(shown)
             points = await analysis_repo.fetch_points(conn, session_id, keys) if keys else {}
-            report = await analysis_repo.fetch_report(conn, session_id) if keys else None
+            report = await analysis_repo.fetch_report(conn, session_id)
             atts = {
                 a.id: (a.filename, a.kind)
                 for a in await att_repo.list_for_session(conn, session_id)
@@ -555,6 +555,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         conn = await db_mod.connect(cfg)
         try:
             report = await analysis_repo.fetch_report(conn, session_id)
+            points = await analysis_repo.fetch_points(conn, session_id)
         finally:
             await conn.close()
         if report is None:
@@ -566,6 +567,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             }
             for p in report.get("plots", [])
         ]
+        report["points"] = points
         return JSONResponse(jsonable_encoder(report))
 
     @api.get("/plots/{name}")
@@ -617,7 +619,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
                     continue  # the watcher below is the timeline's source of truth
                 yield {
                     "event": ev["event"],
-                    "data": json.dumps({"payload": ev["payload"], "ts": ev["ts"]}),
+                    "data": json.dumps({"payload": ev["payload"], "ts": ev["ts"]}, default=str),
                 }
             async with contextlib.aclosing(_live_events(cfg, session_id, start)) as live:
                 async for item in live:

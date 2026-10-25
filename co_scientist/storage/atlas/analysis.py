@@ -46,13 +46,14 @@ async def save_points(
 
 
 async def fetch_points(
-    conn: AtlasConn, session_id: str, candidate_keys: list[str]
+    conn: AtlasConn, session_id: str, candidate_keys: list[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    if not candidate_keys:
-        return {}
-    cur = conn.coll(_POINTS).find(
-        {"session_id": session_id, "candidate_key": {"$in": list(candidate_keys)}}
-    )
+    query: dict[str, Any] = {"session_id": session_id}
+    if candidate_keys is not None:
+        if not candidate_keys:
+            return {}
+        query["candidate_key"] = {"$in": list(candidate_keys)}
+    cur = conn.coll(_POINTS).find(query)
     return {
         d["candidate_key"]: {"metric": d["metric"], "unit": d["unit"], "points": d["points"]}
         async for d in cur

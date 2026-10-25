@@ -106,13 +106,16 @@ def _data(
     summary = {
         "description": _description(ev),
         "metric": str(doc.get("metric") or ev.get("metric") or ""),
-        "unit": str(doc.get("unit") or ""),
+        "unit": str(doc.get("unit") or ev.get("unit") or ""),
     }
+    raw_points = doc.get("points") or ev.get("points") or []
     points = [
-        {"id": str(p["sample_id"]), "label": str(p["sample_id"]),
+        {"id": str(p["sample_id"] if p.get("sample_id") is not None else p.get("id", "")),
+         "label": str(p["sample_id"] if p.get("sample_id") is not None else p.get("label", p.get("id", ""))),
          "group": str(p.get("group", "")), "value": float(p["value"])}
-        for p in doc.get("points", [])
-        if p.get("sample_id") is not None and isinstance(p.get("value"), int | float)
+        for p in raw_points
+        if (p.get("sample_id") is not None or p.get("id") is not None)
+        and isinstance(p.get("value"), int | float)
     ]
     return summary, points
 
@@ -171,7 +174,7 @@ def to_research_session(
         if isinstance(c, Mapping) and c.get("candidate_key")
     }
     out = []
-    for rank, h in enumerate(select_hypotheses(hypotheses), 1):
+    for rank, h in enumerate(select_hypotheses(hypotheses, include_drafts=include_drafts), 1):
         abstract, explanation = _split_text(h.full_text)
         summary, points = _data(h, candidates, points_by_key)
         mapped = {
@@ -185,6 +188,10 @@ def to_research_session(
         }
         if include_drafts:
             mapped["state"] = h.state
-            mapped["createdAt"] = h.created_at.isoformat()
+            mapped["createdAt"] = (
+                h.created_at.isoformat() if hasattr(h.created_at, "isoformat") else str(h.created_at)
+            )
+            mapped["elo"] = h.elo
+            mapped["matchesPlayed"] = h.matches_played
         out.append(mapped)
     return {"id": session_id, "isDemo": False, "hypotheses": out}

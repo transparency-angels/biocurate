@@ -51,9 +51,22 @@ async def save_points(
 
 
 async def fetch_points(
-    conn: aiosqlite.Connection, session_id: str, candidate_keys: list[str]
+    conn: aiosqlite.Connection, session_id: str, candidate_keys: list[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
+    if candidate_keys is None:
+        async with conn.execute(
+            """SELECT candidate_key, metric, unit, points FROM analysis_points
+               WHERE session_id=?""",
+            (session_id,),
+        ) as cur:
+            async for r in cur:
+                out[r["candidate_key"]] = {
+                    "metric": r["metric"], "unit": r["unit"], "points": json.loads(r["points"]),
+                }
+        return out
+    if not candidate_keys:
+        return {}
     keys = list(dict.fromkeys(candidate_keys))
     for i in range(0, len(keys), 500):  # stay under SQLite's variable limit
         chunk = keys[i : i + 500]
