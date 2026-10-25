@@ -72,6 +72,12 @@ async def upsert_passages(
     return len(ops)
 
 
+async def delete_paper(conn: AtlasConn, pmcid: str) -> int:
+    """Delete every passage of one paper (or upload); returns the number removed."""
+    res = await conn.coll("library").delete_many({"pmcid": pmcid})
+    return int(res.deleted_count)
+
+
 async def has_paper(conn: AtlasConn, pmcid: str) -> bool:
     return await conn.coll("library").find_one({"pmcid": pmcid}, {"_id": 1}) is not None
 

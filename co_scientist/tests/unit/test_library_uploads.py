@@ -148,3 +148,43 @@ def test_anchor_prefix_distinct_for_ids_minted_back_to_back() -> None:
     metas = [uploads.parse_document("a.docx", _docx(["x"]), ids.attachment_id())[0]
              for _ in range(50)]
     assert len({m.pmcid for m in metas}) == 50
+
+
+async def test_failed_ingest_leaves_no_passages(monkeypatch) -> None:
+    from pymongo.errors import BulkWriteError
+
+    store: dict[str, dict] = {}
+    statuses: list = []
+
+    class Res:
+        def __init__(self, n):
+            self.deleted_count = n
+
+    class Coll:
+        async def bulk_write(self, ops, ordered=False):
+            for op in ops[:2]:  # two writes land, then the batch fails
+                store[op._filter["_id"]] = op._doc
+            raise BulkWriteError({"writeErrors": []})
+
+        async def delete_many(self, flt):
+            gone = [k for k, v in store.items() if v["pmcid"] == flt["pmcid"]]
+            for k in gone:
+                del store[k]
+            return Res(len(gone))
+
+    class Conn:
+        def coll(self, name):
+            assert name == "library"
+            return Coll()
+
+    async def get(conn, bucket, blob_id):
+        return _docx(["One.", "Two.", "Three."])
+
+    async def set_status(conn, aid, status, error=None):
+        statuses.append((status, error))
+
+    monkeypatch.setattr(uploads.blobs, "get", get)
+    monkeypatch.setattr(uploads.attachments, "set_status", set_status)
+    n = await uploads.ingest_attachment(Conn(), Config(), _meta("a.docx"))
+    assert n == 0 and store == {}
+    assert statuses == [("failed", "could not be read as a document")]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from functools import partial
 
 from pymongo.errors import OperationFailure
@@ -101,7 +102,9 @@ async def _store_upload(conn, cfg, sid, filename, text):
     return meta
 
 
-async def test_upload_passages_visible_only_to_their_session(atlas_conn, atlas_cfg):
+async def test_upload_passages_visible_only_to_their_session(
+    atlas_conn, atlas_cfg, monkeypatch
+):
     from co_scientist.library import search
 
     # Legacy Europe PMC passage: no `source` field at all (ruling S1: no backfill needed).
@@ -146,10 +149,11 @@ async def test_upload_passages_visible_only_to_their_session(atlas_conn, atlas_c
     await eventually(partial(anchors, "SESS_A"), want_a)
     await eventually(partial(anchors, "SESS_B"), want_b)
     await eventually(partial(anchors, None), {"PMC777#p1"})
-    assert search._SCOPED_READY[(atlas_conn.db.name, atlas_conn.prefix)] is True
+    assert search._SCOPED_READY[(atlas_conn.db.name, atlas_conn.prefix)][0] is True
 
+    monkeypatch.setattr(search, "_NOT_READY_TTL_S", 1e9)  # keep the forced fallback
     # S2 fallback: v1 indexes unfiltered, other sessions dropped in Python.
-    search._SCOPED_READY[(atlas_conn.db.name, atlas_conn.prefix)] = False
+    search._SCOPED_READY[(atlas_conn.db.name, atlas_conn.prefix)] = (False, time.monotonic())
     await eventually(partial(anchors, "SESS_A"), want_a)
     await eventually(partial(anchors, "SESS_B"), want_b)
     await eventually(partial(anchors, None), {"PMC777#p1"})

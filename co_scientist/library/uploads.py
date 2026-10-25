@@ -111,6 +111,10 @@ async def ingest_attachment(conn: AtlasConn, cfg: Config, meta: AttachmentMeta) 
         )
     except Exception as e:
         log.warning("upload_ingest_failed", attachment_id=meta.id, error=type(e).__name__)
+        try:  # a partial bulk write may have stored some passages
+            await lib_store.delete_paper(conn, f"UPLOAD{meta.id[-12:]}")
+        except Exception as ce:
+            log.warning("upload_cleanup_failed", attachment_id=meta.id, error=type(ce).__name__)
         await attachments.set_status(conn, meta.id, "failed", UNREADABLE)
         return 0
     await attachments.set_status(conn, meta.id, "ingested")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from co_scientist.config import Config, LibraryCfg
 from co_scientist.library.search import LibraryHit, build_hybrid_pipeline, rerank, rrf
 
@@ -219,3 +221,41 @@ async def test_hybrid_search_uses_v2_when_both_queryable_and_caches() -> None:
     assert vs["index"] == "library_vec_v2" and "filter" in vs
     assert coll.pipelines[1] == coll.pipelines[0]
     assert len(search._SCOPED_READY) == 1
+
+
+@pytest.fixture(autouse=True)
+def _clear_scoped_ready():
+    from co_scientist.library import search
+
+    search._SCOPED_READY.clear()
+    yield
+    search._SCOPED_READY.clear()
+
+
+async def test_scoped_ready_false_is_rechecked_after_ttl(monkeypatch) -> None:
+    from co_scientist.library import search
+
+    now = [1000.0]
+    monkeypatch.setattr(search.time, "monotonic", lambda: now[0])
+    idx = {"library_text_v2": True, "library_vec_v2": False}
+    calls = []
+    coll = _Coll([], idx)
+    orig = coll.list_search_indexes
+
+    async def counting(name=None):
+        calls.append(1)
+        return await orig(name)
+
+    coll.list_search_indexes = counting
+    conn = _Conn(coll)
+    assert await search.scoped_indexes_ready(conn, Config()) is False
+    idx["library_vec_v2"] = True
+    now[0] += search._NOT_READY_TTL_S - 1
+    assert await search.scoped_indexes_ready(conn, Config()) is False
+    assert len(calls) == 1
+    now[0] += 2
+    assert await search.scoped_indexes_ready(conn, Config()) is True
+    assert len(calls) == 2
+    now[0] += 10_000  # True is cached for good
+    assert await search.scoped_indexes_ready(conn, Config()) is True
+    assert len(calls) == 2

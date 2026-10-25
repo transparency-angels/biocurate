@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
@@ -167,19 +168,27 @@ async def rerank(cfg: Config, query: str, hits: list[LibraryHit], top_k: int) ->
         return hits[:top_k]
 
 
-# (db name, collection prefix) -> whether both v2 indexes were queryable when first checked.
-_SCOPED_READY: dict[tuple[str, str], bool] = {}
+# (db name, collection prefix) -> (both v2 indexes queryable, monotonic time of the check).
+_SCOPED_READY: dict[tuple[str, str], tuple[bool, float]] = {}
+_NOT_READY_TTL_S = 60.0
 
 
 async def scoped_indexes_ready(conn: AtlasConn, cfg: Config) -> bool:
-    """True once both v2 indexes are queryable; checked once per process per connection prefix."""
+    """True once both v2 indexes are queryable.
+
+    Readiness is cached per process and connection prefix: `True` for good, `False` only
+    for `_NOT_READY_TTL_S` so a server started mid-build moves to v2 without a restart.
+    """
     key = (conn.db.name, conn.prefix)
-    if key not in _SCOPED_READY:
-        lib = cfg.library
-        cur = await conn.coll("library").list_search_indexes()
-        ready = {d["name"] for d in await cur.to_list() if d.get("queryable")}
-        _SCOPED_READY[key] = {lib.scoped_search_index, lib.scoped_vector_index} <= ready
-    return _SCOPED_READY[key]
+    cached = _SCOPED_READY.get(key)
+    if cached is not None and (cached[0] or time.monotonic() - cached[1] < _NOT_READY_TTL_S):
+        return cached[0]
+    lib = cfg.library
+    cur = await conn.coll("library").list_search_indexes()
+    queryable = {d["name"] for d in await cur.to_list() if d.get("queryable")}
+    ready = {lib.scoped_search_index, lib.scoped_vector_index} <= queryable
+    _SCOPED_READY[key] = (ready, time.monotonic())
+    return ready
 
 
 def _visible(hit: LibraryHit, session_id: str | None) -> bool:
