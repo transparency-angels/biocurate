@@ -30,7 +30,8 @@ the database, so a page reload or a second browser tab shows the same data.
 | 400 | `POST /api/sessions` intake problems (section 3) | see the table there |
 | 404 | Unknown session, or the thing you asked for does not exist yet | route specific |
 | 413 | Upload too large or over a storage quota (section 3) | explains which limit |
-| 422 | A required form field is missing, or `after_seq` is not a non-negative integer | FastAPI validation list |
+| 422 | A required form field is missing, or `GET /timeline` got an `after_seq` that is not a non-negative integer (`/events` treats a bad value as 0 instead) | FastAPI validation list |
+| 500 | `/overview`, `/sources` or `/synthesis` of an old session whose result file on disk is unreadable | `stored file is unreadable` |
 | 503 | The database is unavailable | always exactly `database unavailable` |
 
 The 503 text is fixed on purpose: the real database error can contain host names
@@ -276,6 +277,7 @@ only when the session had a usable tabular attachment.
   "drugs": ["FLUOROURACIL"],
   "sample_count": 412,
   "generated_at": "2026-10-24T18:01:02+00:00",
+  "created_at": "2026-10-24T18:01:03+00:00",
   "endpoint": { "...": "which duration and event columns were used" },
   "survival_curves": [ { "...": "per-plot curve data" } ],
   "tests": [ { "...": "one row per tested comparison" } ],
@@ -505,6 +507,8 @@ export interface AnalysisReport {
   drugs: string[]
   sample_count: number
   generated_at: string
+  /** When the report was stored (ISO 8601) */
+  created_at: string
   endpoint: Record<string, unknown>
   survival_curves: Record<string, unknown>[]
   tests: Record<string, unknown>[]
