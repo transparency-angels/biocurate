@@ -7,6 +7,7 @@ import { defineConfig } from 'vite'
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
+    allowedHosts: ['e218-193-221-143-82.ngrok-free.app'],
     proxy: {
       '/api': 'http://127.0.0.1:7878',
       '/healthz': 'http://127.0.0.1:7878',

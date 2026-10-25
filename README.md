@@ -3,6 +3,12 @@
 
 **Give it a research goal. Get back a transparent view of how agents generated and ranked a set of novel, reviewed, testable hypotheses.**
 
+> ### 🚀 Explore BioCurate live
+>
+> **[🧬 OPEN THE LIVE APP →](https://e218-193-221-143-82.ngrok-free.app)**
+>
+> *Try a research prompt and follow the agents as they analyze, review, and rank hypotheses.*
+
 ## What we built
 Introducing BioCurate, a multi-agent auditor to the agentic scientist, instilling transparent research provenance into Google Deepmind’s Co-Scientist. This empowers scientists to critically evaluate how AI-generated hypotheses are proposed, supported, and ranked.
 
