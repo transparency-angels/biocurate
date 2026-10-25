@@ -16,7 +16,7 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
-from .. import ids
+from .. import ids, timeline
 from ..llm.prompts import render
 from ..llm.routing import route
 from ..llm.types import AgentCallSpec, CachedBlock, CallContext
@@ -703,6 +703,10 @@ class MetaReviewAgent(BaseAgent):
         }
         await syntheses_repo.save(self.deps.db, session.id, synthesis_json_data)
         synthesis_ref = f"db:syntheses/{session.id}"
+        await timeline.post(
+            self.deps.db, session.id, kind="overview_ready",
+            title="Research overview ready", agent=self.name,
+        )
 
         return TaskResult(
             kind="final_overview_generated",

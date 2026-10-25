@@ -597,6 +597,10 @@ class Supervisor:
         if stop_reason != StopReason.EXTERNAL:
             await sess_repo.set_status(conn, session.id, "done")
 
+        await timeline.post(
+            conn, session.id, kind="session_done", title="Session finished",
+            body=stop_reason.value if stop_reason else "",
+        )
         await self._emit(conn, session.id, "session_done",
                          {"stop_reason": stop_reason.value if stop_reason else None})
 
@@ -649,6 +653,9 @@ class Supervisor:
             },
             "sources_list": [],
         })
+        await timeline.post(
+            conn, session.id, kind="overview_ready", title="Research overview ready",
+        )
         return f"db:syntheses/{session.id}"
 
     # ----------------------------- helpers ----------------------------- #

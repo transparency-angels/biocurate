@@ -17,7 +17,7 @@ from typing import Any, Literal
 
 import numpy as np
 
-from .. import ids
+from .. import ids, timeline
 from ..llm.prompts import render
 from ..llm.routing import route
 from ..llm.tool_loop import ToolLoopExhausted, run_tool_loop
@@ -255,6 +255,11 @@ class EvolutionAgent(BaseAgent):
             state="draft",
         )
         inserted = await hyp_repo.insert(self.deps.db, h)
+        if inserted:
+            await timeline.post(
+                self.deps.db, session_id, kind="evolution_completed",
+                title=f"Evolved: {h.title}", agent=self.name, refs=[hid],
+            )
 
         if inserted and embed_payload is not None:
             try:
