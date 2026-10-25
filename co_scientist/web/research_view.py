@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 
 from ..models import Hypothesis
 from ..models.hypothesis import CitedPaper
+from .data_view import data_analysis
 
 SHOWN_STATES = ("in_tournament", "pinned")
 _REVIEW = re.compile(r"\breviews?\b|\bmeta-?analys", re.I)
@@ -115,7 +116,8 @@ def _data(
     }
     points = [
         {"id": str(p["sample_id"]), "label": str(p["sample_id"]),
-         "group": str(p.get("group", "")), "value": float(p["value"])}
+         "group": str(p.get("group", "")), "value": float(p["value"]),
+         "event": bool(p["event"]) if p.get("event") in (0, 1) else None}
         for p in doc.get("points", [])
         if p.get("sample_id") is not None and isinstance(p.get("value"), int | float)
     ]
@@ -179,10 +181,16 @@ def to_research_session(
     for rank, h in enumerate(select_hypotheses(hypotheses), 1):
         abstract, explanation = _split_text(h.full_text)
         summary, points = _data(h, candidates, points_by_key)
+        key = candidate_key(h)
+        analysis = data_analysis(
+            candidates.get(key) if key else None,
+            (points_by_key.get(key) or {}).get("points", []) if key in candidates else [],
+            report, f"{h.title}\n{h.summary}\n{h.full_text}",
+        )
         mapped = {
             "id": h.id, "rank": rank, "title": h.title, "summary": h.summary,
             "abstract": abstract, "explanation": explanation,
-            "dataSummary": summary, "dataPoints": points,
+            "dataSummary": summary, "dataPoints": points, "dataAnalysis": analysis,
             "sources": [
                 _source(h.id, n, c, journals or {}, attachments or {})
                 for n, c in enumerate(h.citations, 1)

@@ -33,6 +33,7 @@ from co_scientist.tests import atlas_support
 from co_scientist.web.app import create_app
 
 from .test_research_view import (
+    DATA_ANALYSIS_KEYS,
     DATA_POINT_KEYS,
     DATA_SUMMARY_KEYS,
     HYPOTHESIS_KEYS,
@@ -315,6 +316,7 @@ async def test_research_matches_frontend_shape(api_cfg) -> None:
     try:
         await _add_hyp(conn, sid, "alpha", state="in_tournament", elo=1250.0, key=KEY)
         await _add_hyp(conn, sid, "beta", state="pinned", elo=1300.0)
+        await analysis_repo.save_report(conn, sid, {"candidates": [{"candidate_key": KEY}]})
         await analysis_repo.save_points(conn, sid, KEY, metric="os_months", unit="months",
                                         points=[{"sample_id": "S1", "group": "altered",
                                                  "value": 4.0}])
@@ -334,7 +336,10 @@ async def test_research_matches_frontend_shape(api_cfg) -> None:
         assert all(set(p) == DATA_POINT_KEYS for p in h["dataPoints"])
         assert all(set(s) == SOURCE_KEYS for s in h["sources"])
     alpha = body["hypotheses"][1]
-    assert alpha["dataPoints"] == [{"id": "S1", "label": "S1", "group": "altered", "value": 4.0}]
+    assert alpha["dataPoints"] == [
+        {"id": "S1", "label": "S1", "group": "altered", "value": 4.0, "event": None},
+    ]
+    assert set(alpha["dataAnalysis"]) == DATA_ANALYSIS_KEYS
     assert alpha["dataSummary"]["metric"] == "os_months"
     assert alpha["abstract"] == "**Hypothesis.** alpha holds."
     assert alpha["sources"][0]["evidenceType"] == "Review"

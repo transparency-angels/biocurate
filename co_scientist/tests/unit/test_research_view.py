@@ -13,10 +13,14 @@ from co_scientist.web import research_view as rv
 RESEARCH_SESSION_KEYS = {"id", "isDemo", "hypotheses"}
 HYPOTHESIS_KEYS = {
     "id", "rank", "title", "summary", "abstract", "explanation",
-    "dataSummary", "dataPoints", "sources",
+    "dataSummary", "dataPoints", "dataAnalysis", "sources",
 }
 SOURCE_KEYS = {"id", "title", "publication", "year", "evidenceType", "description", "url"}
-DATA_POINT_KEYS = {"id", "label", "group", "value"}
+DATA_POINT_KEYS = {"id", "label", "group", "value", "event"}
+DATA_ANALYSIS_KEYS = {
+    "kind", "status", "headline", "endpoint", "groups", "effect", "significance",
+    "curves", "atRisk", "caveats", "methods", "relatedFindings",
+}
 DATA_SUMMARY_KEYS = {"description", "metric", "unit"}
 EVIDENCE_TYPES = {"Experimental study", "Dataset", "Review", "Clinical study"}
 
@@ -51,18 +55,21 @@ def test_shape_matches_frontend_types() -> None:
         citations=[CitedPaper(title="T", url="https://example.org/p", excerpt="x", year=2020)],
         data_evidence={"candidate_key": KEY, "biomarker": "EGFR", "drug": "ERLOTINIB"},
     )
-    out = rv.to_research_session("ses_x", [h], None, _points())
+    report = {"candidates": [{"candidate_key": KEY, "biomarker": "EGFR",
+                              "alteration_type": "mutation", "drug": "ERLOTINIB"}]}
+    out = rv.to_research_session("ses_x", [h], report, _points())
     assert set(out) == RESEARCH_SESSION_KEYS
     assert out["id"] == "ses_x" and out["isDemo"] is False
     (hyp,) = out["hypotheses"]
     assert set(hyp) == HYPOTHESIS_KEYS
     assert set(hyp["dataSummary"]) == DATA_SUMMARY_KEYS
     assert all(set(p) == DATA_POINT_KEYS for p in hyp["dataPoints"])
+    assert set(hyp["dataAnalysis"]) == DATA_ANALYSIS_KEYS
     assert all(set(s) == SOURCE_KEYS for s in hyp["sources"])
     assert hyp["sources"][0]["evidenceType"] in EVIDENCE_TYPES
     assert hyp["dataPoints"] == [
-        {"id": "S1", "label": "S1", "group": "altered", "value": 3.5},
-        {"id": "S2", "label": "S2", "group": "unaltered", "value": 12.0},
+        {"id": "S1", "label": "S1", "group": "altered", "value": 3.5, "event": None},
+        {"id": "S2", "label": "S2", "group": "unaltered", "value": 12.0, "event": None},
     ]
     assert hyp["dataSummary"]["metric"] == "os_months"
     assert hyp["dataSummary"]["unit"] == "months"
