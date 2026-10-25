@@ -143,6 +143,16 @@ async def test_profile_from_attachments_stores_report_points_and_plots(
     assert set(points) == set(keys)
     assert points[keys[0]]["metric"] == "os_months" and points[keys[0]]["unit"] == "months"
     assert len(points[keys[0]]["points"]) == 30
+    km_points = await analysis_repo.fetch_points(conn, session.id, [f"{keys[0]}|km"])
+    assert f"{keys[0]}|km" in km_points
+    assert km_points[f"{keys[0]}|km"]["metric"] == "kaplan_meier"
+    assert len(km_points[f"{keys[0]}|km"]["points"]) > 0
+    pt = km_points[f"{keys[0]}|km"]["points"][0]
+    assert "time" in pt
+    assert "survival_probability" in pt
+    assert "ci_lower" in pt
+    assert "ci_upper" in pt
+    assert "at_risk" in pt
     assert not (tmp_cfg.session_artifact_dir(session.id) / "data_analysis").exists()
     statuses = {a.id: a.status for a in await att_repo.list_for_session(conn, session.id)}
     assert all(statuses[i] == "analysed" for i in att_ids)
@@ -296,3 +306,24 @@ async def test_no_clinical_metadata_reports_expected_format(
     assert "No clinical metadata table" in result.extra["summary"]
     assert "CSV" in result.extra["summary"]
 
+
+async def test_data_analysis_cli_fallback_to_disk(tmp_path: Path, tmp_cfg: Config) -> None:
+    src = tmp_path / "src"
+    src.mkdir()
+    _write_cohort(src)
+    agent = DataAnalysisAgent(AgentDeps(cfg=tmp_cfg, db=None, llm=MagicMock(), tools=MagicMock()))
+    task = Task(
+        id=ids.task_id(),
+        session_id=ids.session_id(),
+        created_at=datetime.now(UTC),
+        agent="data_analysis",
+        action="ProfileDataset",
+        payload={"data_dir": str(src), "research_goal": "DRUG_A response"},
+    )
+    result = await agent.execute(task)
+    assert result.kind == "data_profiled"
+    assert result.extra["sample_count"] == 30
+    assert result.extra["artifact_path"] is not None
+    assert (tmp_cfg.data_dir / result.extra["artifact_path"]).exists()
+    assert (tmp_cfg.session_artifact_dir(task.session_id) / "data_analysis" / "summary.md").exists()
+    assert (tmp_cfg.session_artifact_dir(task.session_id) / "data_analysis" / "statistical_tests.csv").exists()
