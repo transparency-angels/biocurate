@@ -5,6 +5,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from co_scientist.models import (
+    AssumptionCheck,
+    CitedPaper,
+    Evidence,
     Hypothesis,
     ResearchPlan,
     Review,
@@ -31,9 +34,13 @@ def test_hypothesis_doc_roundtrip() -> None:
         id="hyp_1", session_id="s", created_at=T0, created_by="generation",
         strategy="literature", parent_ids=["a", "b"], title="t", summary="s",
         full_text="f", artifact_path="p", elo=None, state="draft",
+        citations=[CitedPaper(title="P", url="u", year=2020, line_range="L3-L5")],
+        data_evidence={"source": "tcga", "rows": [1, 2]},
     )
     doc = a_hyp._to_doc(h)
     assert doc["_id"] == "hyp_1" and "id" not in doc
+    assert doc["citations"][0]["line_range"] == "L3-L5"
+    assert doc["data_evidence"] == {"source": "tcga", "rows": [1, 2]}
     assert doc["parent_ids"] == ["a", "b"] and doc["elo"] is None
     assert a_hyp._from_doc(doc) == h
 
@@ -94,10 +101,13 @@ def test_review_doc_roundtrip() -> None:
     r = Review(
         id="rev_1", hypothesis_id="h", session_id="s", created_at=T0, kind="full",
         verdict=None, scores=ReviewScores(novelty=0.5, feasibility=None),
+        evidence=[Evidence(claim="c", url="u", excerpt="e", line_range="L1-L2")],
+        assumptions=[AssumptionCheck(assumption="a", plausibility="plausible", rationale="r")],
         body="b", artifact_path="p",
     )
     doc = a_rev._to_doc(r)
     assert doc["_id"] == "rev_1"
+    assert doc["evidence"][0]["line_range"] == "L1-L2"
     assert a_rev._from_doc(doc) == r
 
 

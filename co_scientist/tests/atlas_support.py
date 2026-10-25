@@ -10,6 +10,8 @@ from ulid import ULID
 from co_scientist.config import Config, Secrets, StorageCfg
 
 ENABLED = os.environ.get("CO_SCI_ATLAS_TESTS") == "1"
+# Tests that wait for Atlas Search / Vector Search index builds (minutes each).
+SEARCH_ENABLED = ENABLED and os.environ.get("CO_SCI_ATLAS_SEARCH_TESTS") == "1"
 _SAFE_PREFIX = re.compile(r"^t[0-9a-z]{10,}_$")
 
 

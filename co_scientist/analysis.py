@@ -78,6 +78,12 @@ class DatasetProfiler:
         self.top_curves: dict[str, dict[str, Any]] = {}
         self.data_handling: dict[str, Any] = {}
         self.endpoint: dict[str, str] = {}
+        # Per-sample points are held only for contenders for the reported list: the
+        # best alteration per (biomarker, drug), at most MAX_CANDIDATES in all.
+        self.points: dict[str, list[dict[str, Any]]] = {}
+        self.peak_points = 0
+        self._contenders: dict[str, tuple[float, int, tuple[str, str]]] = {}
+        self._seq = 0
 
     def profile(
         self, data_dir: Path, *, goal: str = "", target_drugs: list[str] | None = None,
@@ -88,6 +94,10 @@ class DatasetProfiler:
         self.tests = []
         self.matrix_paths = {}
         self.top_curves = {}
+        self.points = {}
+        self.peak_points = 0
+        self._contenders = {}
+        self._seq = 0
         self.data_handling = {"matrix_screens": {}}
         metadata_path = self._find_metadata_file(data_dir)
         if metadata_path is None:
@@ -114,6 +124,7 @@ class DatasetProfiler:
             curve["path"] = f"plots/kaplan_meier_{rank}.png"
         report = {
             "candidates": candidates,
+            "points": {c["candidate_key"]: self.points[c["candidate_key"]] for c in candidates},
             "drugs": selected_drugs,
             "sample_count": len(samples),
             "generated_at": datetime.now(UTC).isoformat(),
@@ -246,6 +257,36 @@ class DatasetProfiler:
                 unique.append(candidate)
         return unique[:MAX_CANDIDATES]
 
+    def _offer_points(
+        self, test: dict[str, Any], altered_s: list[str], altered_t: list[float],
+        unaltered_s: list[str], unaltered_t: list[float],
+    ) -> None:
+        """Keep points only while the test can still reach the reported candidates.
+
+        Mirrors `_screen_alterations`: keep the lowest p-value per (biomarker, drug),
+        first seen on ties, then the MAX_CANDIDATES lowest overall (latest evicted on ties).
+        """
+        key, p_value = test["candidate_key"], test["p_value"]
+        group = (test["biomarker"], test["drug"])
+        self._seq += 1
+        rival = next((k for k, v in self._contenders.items() if v[2] == group), None)
+        if rival is not None:
+            if p_value >= self._contenders[rival][0]:
+                return
+            del self._contenders[rival], self.points[rival]
+        self._contenders[key] = (p_value, self._seq, group)
+        self.points[key] = [
+            {"sample_id": sid, "group": name, "value": value}
+            for name, ids, values in (
+                ("altered", altered_s, altered_t), ("unaltered", unaltered_s, unaltered_t),
+            )
+            for sid, value in zip(ids, values, strict=True)
+        ]
+        self.peak_points = max(self.peak_points, len(self.points))
+        if len(self._contenders) > MAX_CANDIDATES:
+            worst = max(self._contenders, key=lambda k: self._contenders[k][:2])
+            del self._contenders[worst], self.points[worst]
+
     def _find_matrix_file(self, data_dir: Path, patterns: list[str]) -> Path | None:
         paths = tabular_files(data_dir)
         return next((path for pattern in patterns for path in paths if fnmatchcase(path.name.lower(), pattern.lower())), None)
@@ -266,6 +307,7 @@ class DatasetProfiler:
             genes = [column.strip() for column in header[1:]]
             durations = [[[], []] for _ in genes]
             events = [[[], []] for _ in genes]
+            sample_ids = [[[], []] for _ in genes]
             seen = set()
             for row in reader:
                 if not row or row[0].strip() not in target:
@@ -288,8 +330,11 @@ class DatasetProfiler:
                         continue
                     durations[i][group].append(sample["os_months"])
                     events[i][group].append(sample["status"])
+                    sample_ids[i][group].append(sid)
         candidates = []
-        for gene, (altered_t, unaltered_t), (altered_e, unaltered_e) in zip(genes, durations, events, strict=True):
+        for gene, (altered_t, unaltered_t), (altered_e, unaltered_e), (
+            altered_s, unaltered_s,
+        ) in zip(genes, durations, events, sample_ids, strict=True):
             if not gene or min(len(altered_t), len(unaltered_t)) < MIN_GROUP:
                 continue
             result = logrank_test(altered_t, unaltered_t, event_observed_A=altered_e, event_observed_B=unaltered_e)
@@ -317,10 +362,12 @@ class DatasetProfiler:
                 "unaltered_censored": len(unaltered_e) - sum(unaltered_e),
                 "nominally_significant": bool(np.isfinite(p_value) and p_value <= ALPHA),
                 "matrix_file": str(matrix_path), "cohort": f"Clinical cohort ({drug})",
+                "candidate_key": f"{gene}|{alteration}|{drug}",
             }
             self.tests.append(test)
             if test["nominally_significant"]:
                 candidates.append(test)
+                self._offer_points(test, altered_s, altered_t, unaltered_s, unaltered_t)
                 existing = self.top_curves.get(gene)
                 if existing is None or p_value < existing["association"]["p_value"]:
                     self.top_curves[gene] = {"association": test, "altered": _curve_data(altered_km), "unaltered": _curve_data(unaltered_km)}

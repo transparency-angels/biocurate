@@ -145,7 +145,7 @@ async def test_search_library_tool_accepts_every_schema_kind(monkeypatch) -> Non
     _patch_store(monkeypatch)
     seen: list[str] = []
 
-    async def hits(db, cfg, query, *, k, kind):
+    async def hits(db, cfg, query, *, k, kind, session_id=None):
         seen.append(kind)
         return []
 
@@ -160,3 +160,26 @@ async def test_search_library_tool_accepts_every_schema_kind(monkeypatch) -> Non
     for kind in kinds:
         await SearchLibraryTool().call({"query": "x", "kind": kind}, _atlas_ctx(Config()))
     assert seen == kinds
+
+
+async def test_search_library_tool_passes_session_id(monkeypatch) -> None:
+    from co_scientist.library import search
+
+    _patch_store(monkeypatch)
+    seen: list = []
+
+    async def hits(db, cfg, query, *, k, kind, session_id):
+        seen.append(session_id)
+        return []
+
+    monkeypatch.setattr(search, "hybrid_search", hits)
+    from co_scientist.tools.builtins import library as tool_mod
+
+    async def ready(db, names):
+        return None
+
+    monkeypatch.setattr(tool_mod, "_unready_index", ready)
+    ctx = _atlas_ctx(Config())
+    ctx.session_id = "S9"
+    await SearchLibraryTool().call({"query": "x"}, ctx)
+    assert seen == ["S9"]

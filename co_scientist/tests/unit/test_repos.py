@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from co_scientist import ids
 from co_scientist.models import (
+    AssumptionCheck,
+    CitedPaper,
+    Evidence,
     Hypothesis,
     ResearchPlan,
     Review,
@@ -164,6 +167,86 @@ async def test_review_id_iteration_collision_blocked(any_conn) -> None:
     )
     assert await rev_repo.insert(any_conn, r) is True
     assert await rev_repo.insert(any_conn, r) is False   # idempotent
+
+
+@pytest.mark.asyncio
+async def test_hypothesis_roundtrip_keeps_citations_and_data_evidence(any_conn) -> None:
+    s = await _make_session(any_conn)
+    hid = ids.hypothesis_id(s.id, "generation/literature", "cit")
+    h = Hypothesis(
+        id=hid, session_id=s.id, created_at=_now(),
+        created_by="generation", strategy="literature",
+        title="t", summary="s", full_text="f",
+        citations=[
+            CitedPaper(title="P", url="http://x", excerpt="e", doi="10.1/x",
+                       year=2020, line_range="L3-L5"),
+            CitedPaper(title="Q", url="http://y"),
+        ],
+        data_evidence={"source": "tcga", "rows": [1, 2], "nested": {"p": 0.01}},
+        artifact_path=f"artifacts/{s.id}/hypotheses/{hid}.json", state="draft",
+    )
+    assert await hyp_repo.insert(any_conn, h) is True
+    got = await hyp_repo.fetch(any_conn, hid)
+    assert got is not None
+    assert got.citations == h.citations
+    assert got.citations[0].line_range == "L3-L5"
+    assert got.data_evidence == h.data_evidence
+    for listed in (
+        await hyp_repo.fetch_many(any_conn, [hid]),
+        await hyp_repo.list_for_session(any_conn, s.id),
+    ):
+        assert listed[0].citations == h.citations
+        assert listed[0].data_evidence == h.data_evidence
+
+
+@pytest.mark.asyncio
+async def test_review_roundtrip_keeps_evidence_and_assumptions(any_conn) -> None:
+    s = await _make_session(any_conn)
+    hid = ids.hypothesis_id(s.id, "generation/literature", "ev")
+    await hyp_repo.insert(any_conn, Hypothesis(
+        id=hid, session_id=s.id, created_at=_now(),
+        created_by="generation", strategy="literature",
+        title="t", summary="s", full_text="f",
+        artifact_path=f"artifacts/{s.id}/hypotheses/{hid}.json", state="draft",
+    ))
+    rid = ids.review_id(hid, "full", iteration=0)
+    r = Review(
+        id=rid, hypothesis_id=hid, session_id=s.id, created_at=_now(), kind="full",
+        evidence=[Evidence(claim="c", url="http://x", excerpt="e", line_range="L1-L2")],
+        assumptions=[AssumptionCheck(assumption="a", plausibility="uncertain", rationale="r")],
+        body="ok", artifact_path=f"artifacts/{s.id}/reviews/{rid}.json",
+    )
+    assert await rev_repo.insert(any_conn, r) is True
+    for got in (
+        await rev_repo.fetch(any_conn, rid),
+        (await rev_repo.list_for_hypothesis(any_conn, hid))[0],
+        (await rev_repo.list_for_session(any_conn, s.id))[0],
+    ):
+        assert got is not None
+        assert got.evidence == r.evidence and got.evidence[0].line_range == "L1-L2"
+        assert got.assumptions == r.assumptions
+
+
+@pytest.mark.asyncio
+async def test_old_rows_without_new_columns_read_as_empty(conn) -> None:
+    s = await _make_session(conn)
+    await conn.execute(
+        """INSERT INTO hypotheses(id, session_id, created_at, created_by, strategy,
+               title, summary, full_text, artifact_path, matches_played, state)
+           VALUES ('old_h', ?, ?, 'generation', 'literature', 't', 's', 'f', 'p', 0, 'draft')""",
+        (s.id, _now().isoformat()),
+    )
+    await conn.execute(
+        """INSERT INTO reviews(id, hypothesis_id, session_id, created_at, kind, body,
+               artifact_path)
+           VALUES ('old_r', 'old_h', ?, ?, 'full', 'b', 'p')""",
+        (s.id, _now().isoformat()),
+    )
+    await conn.commit()
+    h = await hyp_repo.fetch(conn, "old_h")
+    r = await rev_repo.fetch(conn, "old_r")
+    assert h is not None and h.citations == [] and h.data_evidence is None
+    assert r is not None and r.evidence == [] and r.assumptions == []
 
 
 @pytest.mark.asyncio
@@ -1034,3 +1117,186 @@ async def test_fail_returns_actual_status(any_conn) -> None:
     row = await _read_task(any_conn, t.id)
     assert row["attempts"] == 3 and row["status"] == "dead"
     assert row["last_error"] == "e2" and row["finished_at"] is not None
+
+
+# ---- blobs and attachments ----
+
+
+def _att(**kw):
+    from co_scientist.models.attachment import AttachmentMeta
+
+    base = {
+        "id": "att_1", "session_id": "ses_att", "filename": "a.csv",
+        "content_type": "text/csv", "size": 10, "sha256": "h1", "kind": "tabular",
+        "status": "stored", "blob_id": "b1", "uploaded_at": _now(), "error": None,
+    }
+    base.update(kw)
+    return AttachmentMeta(**base)
+
+
+async def test_blob_roundtrip_large(any_conn):
+    import os
+
+    from co_scientist.storage.repos import blobs
+
+    data = os.urandom(20 * 1024 * 1024)
+    bid = await blobs.put(any_conn, "attachments", "big.bin", data, {"k": "v"})
+    assert isinstance(bid, str)
+    assert await blobs.get(any_conn, "attachments", bid) == data
+    await blobs.delete(any_conn, "attachments", bid)
+
+
+async def test_blob_malformed_id_is_missing_not_an_error(any_conn):
+    from co_scientist.storage.repos import blobs
+
+    for bad in ("not-an-object-id", "", "zz" * 12):
+        with pytest.raises(KeyError):
+            await blobs.get(any_conn, "plots", bad)
+        await blobs.delete(any_conn, "plots", bad)  # no-op, like a missing id
+
+
+async def test_attachment_insert_dedupes_and_lists_in_order(any_conn):
+    from co_scientist.storage.repos import attachments as repo
+
+    t = _now()
+    a = _att(id="att_a", filename="a.csv", uploaded_at=t + timedelta(seconds=2))
+    b = _att(id="att_b", filename="b.csv", sha256="h2", uploaded_at=t)
+    assert await repo.insert(any_conn, a) is True
+    assert await repo.insert(any_conn, b) is True
+    dup = _att(id="att_c", filename="a.csv", uploaded_at=t)
+    assert await repo.insert(any_conn, dup) is False
+    got = await repo.list_for_session(any_conn, "ses_att")
+    assert [x.id for x in got] == ["att_b", "att_a"]
+    assert got[0] == b
+    assert await repo.fetch(any_conn, "att_a") == a
+    assert await repo.fetch(any_conn, "nope") is None
+    await repo.delete(any_conn, "att_a")
+    assert await repo.fetch(any_conn, "att_a") is None
+
+
+async def test_attachment_bytes_accounting(any_conn):
+    from co_scientist.storage.repos import attachments as repo
+
+    await repo.insert(any_conn, _att(id="x1", sha256="s1", size=100))
+    await repo.insert(any_conn, _att(id="x2", sha256="s2", size=50))
+    await repo.insert(any_conn, _att(id="x3", session_id="ses_other", size=7))
+    assert await repo.session_bytes(any_conn, "ses_att") == 150
+    assert await repo.session_bytes(any_conn, "ses_empty") == 0
+    assert await repo.total_bytes(any_conn) == 157
+
+
+async def test_attachment_set_status_and_older_than(any_conn):
+    from co_scientist.storage.repos import attachments as repo
+
+    t = _now()
+    await repo.insert(any_conn, _att(id="old", sha256="s1", uploaded_at=t - timedelta(days=10)))
+    await repo.insert(any_conn, _att(id="new", sha256="s2", uploaded_at=t))
+    await repo.set_status(any_conn, "old", "failed", "boom")
+    m = await repo.fetch(any_conn, "old")
+    assert (m.status, m.error) == ("failed", "boom")
+    await repo.set_status(any_conn, "old", "ingested")
+    m = await repo.fetch(any_conn, "old")
+    assert (m.status, m.error) == ("ingested", None)
+    old = await repo.older_than(any_conn, t - timedelta(days=1))
+    assert [x.id for x in old] == ["old"]
+
+
+def _report(**over) -> dict:
+    return {
+        "summary_markdown": "# Summary", "tests": [{"biomarker": "TP53", "p_value": 0.01}],
+        "methods": {"alpha": 0.05}, "candidates": [{"candidate_key": "TP53|mutation|CIS"}],
+        "selection": {"eligible_tests": 1}, "sample_count": 40, "drugs": ["CIS"],
+        "plots": [{"name": "km_1.png", "blob_id": "blob_1", "content_type": "image/png"}],
+        **over,
+    }
+
+
+@pytest.mark.asyncio
+async def test_analysis_report_roundtrip(any_conn) -> None:
+    from co_scientist.storage.repos import analysis as repo
+
+    assert await repo.fetch_report(any_conn, "ses_an") is None
+    await repo.save_report(any_conn, "ses_an", _report())
+    got = await repo.fetch_report(any_conn, "ses_an")
+    assert got is not None
+    for key, value in _report().items():
+        assert got[key] == value
+    assert got["created_at"].tzinfo is not None
+    await repo.save_report(any_conn, "ses_an", _report(sample_count=41))  # upsert
+    assert (await repo.fetch_report(any_conn, "ses_an"))["sample_count"] == 41
+
+
+@pytest.mark.asyncio
+async def test_fetch_points_returns_only_requested_keys(any_conn) -> None:
+    from co_scientist.storage.repos import analysis as repo
+
+    pts = [{"sample_id": "S1", "group": "altered", "value": 1.5}]
+    for key in ("A|mutation|D", "B|mutation|D", "C|deletion|D"):
+        await repo.save_points(any_conn, "ses_an", key, metric="OS", unit="months", points=pts)
+    await repo.save_points(any_conn, "ses_other", "A|mutation|D", metric="OS", unit="months",
+                           points=[])
+    await repo.save_points(  # upsert
+        any_conn, "ses_an", "A|mutation|D", metric="PFS", unit="months", points=pts * 2)
+    got = await repo.fetch_points(any_conn, "ses_an", ["A|mutation|D", "C|deletion|D", "Z|x|y"])
+    assert set(got) == {"A|mutation|D", "C|deletion|D"}
+    assert got["A|mutation|D"] == {"metric": "PFS", "unit": "months", "points": pts * 2}
+    assert await repo.fetch_points(any_conn, "ses_an", []) == {}
+
+
+@pytest.mark.asyncio
+async def test_points_doc_size_for_24k_samples(any_conn) -> None:
+    from co_scientist.storage.atlas.client import AtlasConn
+    from co_scientist.storage.repos import analysis as repo
+
+    pts = [
+        {"sample_id": f"TCGA-{i:06d}-01", "group": "altered" if i % 2 else "unaltered",
+         "value": i / 7}
+        for i in range(24_000)
+    ]
+    key = "TP53|mutation|CISPLATIN"
+    await repo.save_points(any_conn, "ses_big", key, metric="OS", unit="months", points=pts)
+    got = await repo.fetch_points(any_conn, "ses_big", [key])
+    assert got[key]["points"] == pts
+    if isinstance(any_conn, AtlasConn):
+        import bson
+
+        doc = await any_conn.coll("analysis_points").find_one({"session_id": "ses_big"})
+        size = len(bson.encode(doc))
+        print(f"BSON size of 24k-point doc: {size}")
+        assert size < 16 * 1024 * 1024
+
+
+@pytest.mark.asyncio
+async def test_synthesis_roundtrip(any_conn) -> None:
+    from co_scientist.storage.repos import syntheses as repo
+
+    assert await repo.fetch(any_conn, "ses_syn") is None
+    doc = {
+        "session_id": "ses_syn", "generated_at": "2026-01-01T00:00:00+00:00",
+        "overview": {"markdown": "# Hi"}, "sources": {"sources": [{"id": "S1"}]},
+        "sources_list": [{"id": "S1"}],
+    }
+    await repo.save(any_conn, "ses_syn", doc)
+    assert await repo.fetch(any_conn, "ses_syn") == doc
+    await repo.save(any_conn, "ses_syn", {**doc, "overview": {"markdown": "# New"}})
+    assert (await repo.fetch(any_conn, "ses_syn"))["overview"]["markdown"] == "# New"
+
+
+@pytest.mark.asyncio
+async def test_load_overview_markdown_db_and_legacy_file(any_conn, tmp_path) -> None:
+    from types import SimpleNamespace
+
+    from co_scientist.overview import load_overview_markdown
+    from co_scientist.storage.repos import syntheses as repo
+
+    cfg = SimpleNamespace(data_dir=tmp_path)
+    sess = lambda ref: SimpleNamespace(final_overview=ref)  # noqa: E731
+    assert await load_overview_markdown(any_conn, cfg, sess(None)) is None
+    assert await load_overview_markdown(any_conn, cfg, sess("db:syntheses/ses_lo")) is None
+    await repo.save(any_conn, "ses_lo", {"overview": {"markdown": "# From db"}})
+    assert await load_overview_markdown(any_conn, cfg, sess("db:syntheses/ses_lo")) == "# From db"
+    (tmp_path / "o.md").write_text("# Legacy md")
+    (tmp_path / "s.json").write_text(json.dumps({"overview": {"markdown": "# Legacy json"}}))
+    assert await load_overview_markdown(any_conn, cfg, sess("o.md")) == "# Legacy md"
+    assert await load_overview_markdown(any_conn, cfg, sess("s.json")) == "# Legacy json"
+    assert await load_overview_markdown(any_conn, cfg, sess("gone.md")) is None

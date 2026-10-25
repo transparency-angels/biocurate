@@ -17,7 +17,7 @@ from typing import Any, Literal
 
 import numpy as np
 
-from .. import ids
+from .. import ids, timeline
 from ..llm.prompts import render
 from ..llm.routing import route
 from ..llm.tool_loop import ToolLoopExhausted, run_tool_loop
@@ -255,6 +255,11 @@ class EvolutionAgent(BaseAgent):
             state="draft",
         )
         inserted = await hyp_repo.insert(self.deps.db, h)
+        if inserted:
+            await timeline.post(
+                self.deps.db, session_id, kind="evolution_completed",
+                title=f"Evolved: {h.title}", agent=self.name, refs=[hid],
+            )
 
         if inserted and embed_payload is not None:
             try:
@@ -350,7 +355,10 @@ class EvolutionAgent(BaseAgent):
 
     async def _latest_feedback(self, session_id: str) -> str | None:
         fb = await fb_repo.latest_system_feedback(self.deps.db, session_id)
-        return fb.text if fb is not None else None
+        directives = await fb_repo.active_for_session(self.deps.db, session_id)
+        human = [f.text for f in directives if f.source == "human" and f.kind == "directive"][:8]
+        parts = ([fb.text] if fb is not None else []) + list(reversed(human))
+        return "\n\n".join(parts) if parts else None
 
 
 # ----------------------------- formatting helpers ----------------------------- #

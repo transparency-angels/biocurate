@@ -55,6 +55,7 @@ from ..models import (
     TournamentMatch,
 )
 from ..orchestrator.elo import expected_score, k_factor
+from ..overview import DB_PREFIX, load_overview_markdown
 from ..storage import db as db_mod
 from ..storage.artifacts import read_json, write_json
 from ..storage.atlas import client as atlas_client
@@ -658,18 +659,21 @@ class SessionMcpServer:
         session_id = _require_str(args, "session_id")
         async with self._db() as conn:
             session = await sess_repo.fetch(conn, session_id)
-        if session is None:
-            raise _ToolError(f"no such session: {session_id}")
-        if not session.final_overview:
-            raise _ToolError(
-                f"session {session_id} has no final overview yet. "
-                "Check session_status; the overview is written when the session finalizes."
-            )
-        path = self.cfg.data_dir / session.final_overview
+            if session is None:
+                raise _ToolError(f"no such session: {session_id}")
+            if not session.final_overview:
+                raise _ToolError(
+                    f"session {session_id} has no final overview yet. "
+                    "Check session_status; the overview is written when the session finalizes."
+                )
+            markdown = await load_overview_markdown(conn, self.cfg, session)
+        if markdown is None:
+            raise _ToolError(f"the overview for session {session_id} is missing")
+        ref = session.final_overview
         return text_result({
             "session_id": session_id,
-            "path": str(path),
-            "overview_markdown": path.read_text(encoding="utf-8"),
+            "path": ref if ref.startswith(DB_PREFIX) else str(self.cfg.data_dir / ref),
+            "overview_markdown": markdown,
         })
 
     # ------------------------------ writing ------------------------------ #

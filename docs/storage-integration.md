@@ -65,14 +65,14 @@ TOML passed with the global `--config/-c` option
 
 ```toml
 [storage]
-backend = "atlas"          # default "sqlite"
+backend = "atlas"          # runtime default; use "sqlite" for offline/local runs
 atlas_db = "biocurate"     # the DB user only has readWrite here
 atlas_prefix = ""          # collection-name prefix; tests set a unique one
 ```
 
 `.env` needs `MONGODB_URI` (`mongodb+srv://<user>:<password>@<cluster>/`) and
-`VOYAGE_API_KEY`. The default stays `sqlite` so CI and the offline tests need
-no network.
+`VOYAGE_API_KEY`. CI and offline unit tests use SQLite fixtures and need no
+network; Atlas tests opt in with `CO_SCI_ATLAS_TESTS=1`.
 
 **The Atlas client.** It is `pymongo.AsyncMongoClient` (not Motor), created
 with `tz_aware=True` and `tlsCAFile=certifi.where()`; the Mac dev machine
@@ -104,7 +104,7 @@ ObjectId.
 | Collection | Holds | Notes |
 |---|---|---|
 | `sessions` | `Session` | `research_plan`, `config_snapshot` stored as subdocuments |
-| `hypotheses` | `Hypothesis` | ids hash in the session id (`ids.hypothesis_id`), so there are no cross-session collisions. **`citations` are not in the row**; they live in the hypothesis JSON artifact on disk, as on SQLite |
+| `hypotheses` | `Hypothesis` | ids hash in the session id (`ids.hypothesis_id`), so there are no cross-session collisions. `citations` and `data_evidence` are fields on the row (see below) |
 | `reviews` | `Review` | |
 | `tournament_matches` | `TournamentMatch` | |
 | `elo_journal` | one doc per applied Elo update, `_id = match_id` | makes Elo updates idempotent |
@@ -115,7 +115,32 @@ ObjectId.
 | `spans` | tracing spans | `attrs` merged server-side on `end` |
 | `embeddings_meta` | which hypotheses are embedded with which model | unique `(hypothesis_id, model)` |
 | `hypothesis_vectors` | Voyage vectors for dedup/similarity | Atlas only (SQLite uses FAISS files) |
-| `library` | evidence passages | Atlas only, see §5 |
+| `library` | evidence passages (Europe PMC and uploaded documents) | Atlas only, see §5 |
+| `attachments_meta` | one doc per uploaded file (metadata only) | SQLite table `attachments`. The bytes are in the GridFS `attachments` bucket (§12) |
+| `timeline` | per-session progress messages, unique `(session_id, seq)` | SQLite table `timeline` (§13) |
+| `timeline_counters` | per-session `seq` allocator | Atlas only |
+| `analysis_reports` | one data-analysis report per session, `_id = session_id` | plots are in the GridFS `plots` bucket |
+| `analysis_points` | survival points per `(session_id, candidate_key)` | feeds the UI's `dataPoints` |
+| `syntheses` | the final overview and sources, `_id = session_id` | referenced from the session as `db:syntheses/<id>` |
+
+Citations and evidence are fields on the rows: `hypotheses` (`citations`,
+`data_evidence`) and `reviews` (`evidence`, `assumptions`). Rows written before
+SQLite migration `0008_results_on_rows.sql` read back as empty.
+
+**GridFS buckets** (binary content; `AsyncGridFSBucket`, in `storage/atlas/blobs.py`):
+
+| Bucket | Holds | Collections created |
+|---|---|---|
+| `attachments` | the uploaded files | `attachments.files`, `attachments.chunks` |
+| `plots` | the PNG survival plots | `plots.files`, `plots.chunks` |
+
+With a collection prefix (tests) the bucket name is prefixed too. On SQLite both
+buckets are rows of the `blobs` table, keyed by bucket name. Callers use the
+`storage.repos.blobs` repo (`put`, `get`, `delete`) and never touch GridFS directly.
+
+**SQLite migrations for these** (`storage/migrations/`): `0006_blobs_attachments`
+(`blobs`, `attachments`), `0007_timeline`, `0008_results_on_rows`, `0009_analysis`
+(`analysis_reports`, `analysis_points`), `0010_syntheses`.
 
 ### Indexes (`co_scientist/storage/atlas/indexes.py`)
 
@@ -124,13 +149,18 @@ ObjectId.
   - **unique partial `tasks_idempotency_key`**;
   - `mat_hyp_a` / `mat_hyp_b`;
   - `hv_sess`;
-  - `library_pmcid`.
+  - `library_pmcid`;
+  - `att_sess` and unique `att_dedupe` `(session_id, sha256, filename)` on `attachments_meta`, so the same file twice in one session is stored once;
+  - unique `timeline_sess_seq` `(session_id, seq)`;
+  - unique `analysis_pts_key` `(session_id, candidate_key)`.
 - **Search indexes**, declared as `SearchIndexSpec` entries in `SEARCH_INDEX_SPECS`:
 
 | Name | Collection | Type | Definition |
 |---|---|---|---|
 | `library_text` | `library` | Atlas Search | `lucene.english` on `text` and `title`; `kind`, `pmcid` as token; `year` number |
 | `library_vec` | `library` | Vector Search, **Automated Embedding** | `autoEmbed` on `text`, model `voyage-4`; filters `kind`, `year` |
+| `library_text_v2` | `library` | Atlas Search | `library_text` plus `session_id` and `source` as token fields (§14) |
+| `library_vec_v2` | `library` | Vector Search, Automated Embedding | `library_vec` plus `session_id` and `source` filter fields (§14) |
 | `hyp_vec` | `hypothesis_vectors` | Vector Search | `embedding`, `numDimensions = embeddings.dim` (1024), `dotProduct`; filter `session_id` |
 
 To add a search index, append a `SearchIndexSpec(collection, name, type,
@@ -295,7 +325,8 @@ How `AtlasVectorStore` works:
 | Command | What runs |
 |---|---|
 | `uv run pytest -q` | ~550 tests, offline, SQLite only; Atlas tests skipped. This is what CI runs. |
-| `CO_SCI_ATLAS_TESTS=1 uv run pytest -q` | Everything, plus every `any_conn` repo test on Atlas, plus `co_scientist/tests/atlas/` (indexes, library store, hybrid search, vector store). About 15 min, mostly search-index builds. 592 passed on 2026-10-24. |
+| `CO_SCI_ATLAS_TESTS=1 uv run pytest -q` | Everything, plus every `any_conn` repo test on Atlas, plus `co_scientist/tests/atlas/`. Test fixtures build B-tree indexes only, so no search-index waits. About 5 min; 820 passed on 2026-10-25. |
+| `CO_SCI_ATLAS_TESTS=1 CO_SCI_ATLAS_SEARCH_TESTS=1 uv run pytest -q` | Also runs the `atlas_search` tests (hybrid search, vector store), which wait for Atlas Search index builds: several minutes each. Run when search code changes. |
 
 - **Isolation:** Atlas tests use a fresh `t<ulid>_` collection prefix inside `biocurate` and drop *only* those collections on teardown. The guard is in `co_scientist/tests/atlas_support.py` (regex `^t[0-9a-z]{10,}_$`); real collections are never touched.
 - **Secrets:** unit tests never read your `.env`; an autouse fixture strips it. Atlas tests opt back in explicitly.
@@ -310,11 +341,11 @@ placeholders for database access. Here is how each should connect.
 
 ### Researcher UI (prompt input, browsing sessions and hypotheses)
 
-The FastAPI app (`co_scientist/web/app.py`) already uses repos only. Existing
-routes include `/sessions/new`, `/sessions/{id}`,
-`/sessions/{id}/hypotheses/{hid}`, `/api/sessions/{id}`,
-`/api/sessions/{id}/metrics`, `/api/sessions/{id}/events`, and the
-pause/resume/abort/feedback endpoints. Useful reads:
+The FastAPI app (`co_scientist/web/app.py`) already uses repos only. The HTML
+pages are `/`, `/sessions/new`, `/sessions/{id}`,
+`/sessions/{id}/hypotheses/{hid}` and `/sessions/{id}/overview`. The JSON routes
+for the React app are listed in §11a and documented in full in
+[frontend-api.md](frontend-api.md). Useful reads:
 - `sessions.list_with_stats(conn, limit=…)`;
 - `hypotheses.list_for_session(conn, sid)`, `top_by_elo`;
 - `reviews.list_for_hypothesis`;
@@ -325,20 +356,13 @@ pause/resume/abort/feedback endpoints. Useful reads:
 Replace each placeholder with one of these. If a needed query doesn't exist,
 add a repo function as described in §4.
 
-### Attached material ("attach and point material")
+### Attached material
 
-Recommended: turn attachments into **library passages**. They then become
-searchable (text, vector, hybrid, rerank) and citable by agents through
-`search_library`, at no extra cost.
-- Parse the upload into `Passage` objects.
-- Give each a stable anchor such as `UPLOAD<id>#p3` or `UPLOAD<id>#page2.p1`.
-- Store them with `storage.atlas.library.upsert_passages(conn, meta, passages)`.
-- Add a field such as `source: "upload" | "europepmc"` and, if uploads are per
-  session, `session_id`. Add both as `filter` fields in `library_vec_definition`
-  and as token fields in `LIBRARY_TEXT_INDEX`, so searches can be scoped.
-- Store the raw file on disk under the session artifacts dir, as other
-  artifacts are, or in a new collection through a repo. Don't store large
-  binaries inside passage documents.
+Implemented: see §12 (upload flow), §14 (scoped library search) and
+[frontend-api.md](frontend-api.md) for the routes. Documents become session-scoped
+library passages (`source: "upload"`, `session_id`), so agents find and cite them
+through `search_library`. Raw files are in the GridFS `attachments` bucket, with
+metadata in `attachments_meta`. Don't store large binaries inside passage documents.
 
 ### Statistical analysis on the material
 
@@ -357,7 +381,7 @@ Line-level citation came in with the `feature/cite-lines` work (PR #1). The piec
 - **Citations carry the range.** `CitedPaper.line_range` (`models/hypothesis.py`) and `Evidence.line_range` (`models/review.py`) are optional strings, for example `"L3-L5"`.
 - **The verifier ignores line markers.** `citation_verifier._normalize` strips `[S#, L#]` markers before checking that an excerpt appears at its URL.
 
-**Storage impact: none.** Citations and evidence live in the hypothesis and review JSON artifacts on disk, on both backends. The Atlas and SQLite row mappers deliberately leave them out (`storage/atlas/reviews.py` `_to_doc`). So `line_range` is persisted with no schema or repo change. If the UI needs to *query* citations, for example "every hypothesis citing PMC123", add a collection or table through a repo (§4) rather than parsing artifacts in the UI.
+**Storage impact: none beyond the row fields.** Citations and evidence are stored on the `hypotheses` and `reviews` rows on both backends (`citations`, `data_evidence`, `evidence`, `assumptions`), so `line_range` is persisted with them. If the UI needs to *query* citations, for example "every hypothesis citing PMC123", add a collection or table through a repo (§4) rather than parsing the rows in the UI.
 
 **Library passages.** Every `search_library` hit also has a stable `anchor_id`, the full passage `text`, and a `url` that carries the `#fragment`. They are available if citation tracing wants passage-level anchors in addition to line numbers.
 
@@ -378,7 +402,7 @@ Line-level citation came in with the `feature/cite-lines` work (PR #1). The piec
 - [ ] Run `CO_SCI_ATLAS_TESTS=1 uv run pytest -q` once, against Atlas.
 - [ ] Run `co-scientist -c <atlas overlay> init` on the real cluster after
       merging. It creates any new indexes.
-- [ ] Don't commit a `backend = "atlas"` change to `config/default.toml`; use an overlay.
+- [ ] Keep the shipped runtime default on Atlas; use a local config overlay to select SQLite when needed.
 
 ## 10. Live verification (2026-10-24)
 
@@ -411,3 +435,154 @@ Still not seen in a real run:
 - **Indexes:** the old `tasks_queue` index is now a redundant prefix of `tasks_queue_v2`.
 - **SQLite write isolation:** `record_match_result` is serialised only against itself on a shared connection. Other repos write through implicit transactions without a lock, so they can interleave with it (and with each other). Follow-up: a connection-wide write lock, or one connection per worker.
 - **Not used:** Atlas Stream Processing.
+
+---
+
+## 11a. API routes (JSON)
+
+All under the `/api/sessions/{session_id}` router unless noted. The router checks
+the id against `^ses_[0-9A-Z]{26}$` (400 otherwise), and any `PyMongoError` becomes
+a 503 with the fixed text `database unavailable` (the real error is logged by type
+only). Details, examples and TypeScript types: [frontend-api.md](frontend-api.md).
+
+| Route | Reads or writes | Repo |
+|---|---|---|
+| `POST /api/sessions` (multipart: `question`, `files`, `budget_usd`) | creates the session, stores attachments, starts the run | `attachments.store`, `sessions` |
+| `GET ""` (the session row) | `sessions` | `sessions.fetch` |
+| `GET /research` | ranked hypotheses in the React `ResearchSession` shape | `hypotheses`, `analysis`, `attachments`, library journals (Atlas) |
+| `GET /timeline?after_seq=` | `timeline` | `timeline.list_for_session` |
+| `GET /events` (SSE) | event replay plus the timeline watcher, §13 | `events.recent`, `storage/watch.py` |
+| `GET /overview`, `/sources`, `/synthesis` | `syntheses` (falls back to legacy JSON files on disk) | `syntheses.fetch` |
+| `GET /analysis` | `analysis_reports`, with each plot's `blob_id` replaced by a `url` | `analysis.fetch_report` |
+| `GET /plots/{name}` | PNG from the `plots` bucket | `blobs.get` |
+| `GET /attachments` | `attachments_meta` | `attachments.list_for_session` |
+| `GET /metrics` | counters | `obs/metrics` |
+| `POST /pause`, `/resume`, `/abort`, `/feedback` | session status, feedback | `sessions`, `feedback` |
+
+Error codes: 400 malformed id or intake rejection, 404 not found, 413 oversize or
+over quota, 422 missing form field, 503 database unavailable.
+
+## 12. Uploads, attachments and the planning inventory
+
+**Flow** (`POST /api/sessions`, or `co-scientist run --attach FILE`, repeatable):
+
+1. `attachments/intake.py` `accept_uploads` validates names and types (`.pdf`,
+   `.docx`, `.csv`, `.txt`, `.zip`), unzips safely and tracks the unpacked byte
+   budget. Rejections raise `IntakeError` with status 400 (bad request, one file
+   over `max_file_mb`, too many files, corrupt zip) or 413 (zip too large, too many
+   entries or members).
+2. `Supervisor.prepare_session` creates the session row first, then
+   `attachments/store.py` `store_incoming` checks the quotas
+   (`AttachmentQuotaError`, mapped to 413), writes each file to the GridFS
+   `attachments` bucket and inserts an `attachments_meta` row (`status: "stored"`).
+3. On Atlas, documents (PDF, DOCX) are parsed by `library/uploads.py`
+   `ingest_attachment` into library passages, scoped to the session (§14). The
+   attachment becomes `ingested`, or `failed` with a fixed message. A timeline
+   message of kind `attachments_received` lists what was stored and skipped.
+4. The planning step receives an inventory (`attachments/inventory.py`
+   `build_inventory`): per attachment `id`, `filename`, `kind`, `size`, and for
+   tabular files the `header` and up to 3 `sample_rows` (the first 64 KB is read;
+   cells are cut at 100 characters, columns at 200). The plan decides which
+   attachments go to `ProfileDataset`.
+5. `DataAnalysisAgent` copies the chosen attachments into a temporary directory,
+   profiles them, and stores the report (`analysis_reports`), per-candidate points
+   (`analysis_points`) and plots (GridFS `plots`). Nothing is written under
+   `data/artifacts/`.
+
+**Limits** (`[attachments]` in config, `AttachmentsCfg`):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `max_files` | 5 | files per request |
+| `max_file_mb` | 25 | one uploaded file |
+| `max_unzipped_mb` | 512 | total unpacked bytes per request |
+| `max_zip_members` | 50 | files taken from zips per request |
+| `max_session_mb` | 512 | stored bytes per session |
+| `max_total_mb` | 2048 | stored bytes across all sessions |
+
+**Retention.** There is no TTL. Clean up by hand:
+
+```bash
+co-scientist attachments prune --older-than 30          # dry run: lists what would go
+co-scientist attachments prune --older-than 30 --yes    # delete
+```
+
+Prune deletes the GridFS file, the metadata row and (Atlas, documents) the
+session-scoped library passages.
+
+## 13. Timeline and the live stream
+
+`timeline` holds the messages shown in the UI. `seq` is allocated per session
+(SQLite: `MAX+1` inside `BEGIN IMMEDIATE`; Atlas: the `timeline_counters`
+collection) and the unique `(session_id, seq)` index backs it. Agents post with
+`co_scientist/timeline.py` `post()`, which never raises: it appends the row, then
+publishes `timeline_message` on the in-process bus. The wire shape is
+`to_payload` (`seq`, `ts` in epoch ms, `role`, `agent`, `kind`, `title`,
+`body_markdown`, `refs`).
+
+**`GET /api/sessions/{id}/events`** merges two sources into one SSE stream:
+
+- the in-process bus (same process as the poster), and
+- `storage/watch.py` `timeline_after`: on Atlas a **change stream** on `timeline`
+  (so a message inserted by another process, such as `co-scientist run` in a second
+  terminal, still reaches the browser); on SQLite a poll. Not a `dual()` repo,
+  because it is an async generator.
+
+`timeline_message` events carry `id: <seq>` and the flat timeline payload (not
+the bus envelope). The start point is the larger of `?after_seq=` and the
+`Last-Event-ID` header. Messages can arrive out of `seq` order and can repeat
+across reconnects, so the server dedupes with a set of seen `seq`s (not a
+high-water mark, which would drop a late lower one), and clients must also dedupe
+and sort by `seq`. If the watcher fails, only its error type is logged and the bus
+events continue. Frontend usage: [frontend-api.md](frontend-api.md) section 6.
+
+The change stream needs a replica set, which every Atlas cluster is.
+
+## 14. Library v2 indexes, scoping and the backfill
+
+Uploaded documents share the `library` collection with Europe PMC papers. A
+passage carries `source` (`"europepmc"` or `"upload"`) and, for uploads,
+`session_id` and `attachment_id`. The paper id of an upload is
+`UPLOAD<last 12 chars of the attachment id>` (`upload_pmcid`).
+
+The v1 indexes (`library_text`, `library_vec`) cannot filter on `session_id` or
+`source`, so `ensure_indexes` also creates **`library_text_v2`** and
+**`library_vec_v2`**, which can (`LIBRARY_TEXT_INDEX_V2`,
+`library_vec_definition(scoped=True)`). Config names: `LibraryCfg.scoped_search_index`
+and `scoped_vector_index`.
+
+How search picks an index (`library/search.py`):
+
+- `scoped_indexes_ready` checks that both v2 indexes are queryable (cached; a
+  negative result is rechecked after 60 s). When ready, `build_hybrid_pipeline(...,
+  scoped=True)` filters server-side to Europe PMC passages plus the caller's own
+  session uploads.
+- Until then, v1 is queried without a filter, over-fetched, and other sessions'
+  uploads are dropped in Python (`_visible`). Nothing leaks between sessions in
+  either mode; scoped search just returns fuller result lists.
+
+**Owner actions** (search indexes are never updated in place or dropped by code):
+
+1. Run `co-scientist -c <atlas overlay> init` once so the v2 indexes are created.
+   Wait for both to reach `queryable` (the app switches over by itself).
+2. Once v2 is serving, **drop the v1 indexes `library_text` and `library_vec`** in
+   Atlas by hand to stop paying for them. Do this only after both v2
+   indexes are queryable: until then the app falls back to v1, and a dropped v1
+   index would make library search fail.
+3. Optional: backfill `source` on old passages. Search treats a passage without
+   `source` as Europe PMC, so this is only tidiness:
+
+```bash
+uv run python scripts/backfill_library_source.py -c atlas.toml --dry-run   # count
+uv run python scripts/backfill_library_source.py -c atlas.toml             # set source=europepmc
+```
+
+It touches only documents lacking `source`, so re-running is a no-op. `atlas.toml`
+is a config overlay with `[storage] backend = "atlas"`.
+
+## 15. Docs for the front end
+
+[frontend-api.md](frontend-api.md) has every route with request and response
+examples, error codes, the SSE contract, and the TypeScript types the UI needs
+(`TimelineMessage`, `AttachmentInfo`, `AnalysisReport`).
+

@@ -16,7 +16,7 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
-from .. import ids
+from .. import ids, timeline
 from ..llm.prompts import render
 from ..llm.routing import route
 from ..llm.types import AgentCallSpec, CachedBlock, CallContext
@@ -25,10 +25,12 @@ from ..models import SystemFeedback, Task, TaskResult
 from ..models.hypothesis import CitedPaper
 from ..models.review import Evidence
 from ..storage.artifacts import write_json
+from ..storage.repos import analysis as analysis_repo
 from ..storage.repos import feedback as fb_repo
 from ..storage.repos import hypotheses as hyp_repo
 from ..storage.repos import reviews as rev_repo
 from ..storage.repos import sessions as sess_repo
+from ..storage.repos import syntheses as syntheses_repo
 from ..storage.repos import tournaments as tourney_repo
 from .base import BaseAgent
 from .schemas import RECORD_SYSTEM_FEEDBACK_TOOL
@@ -584,16 +586,8 @@ class MetaReviewAgent(BaseAgent):
 
     async def _dataset_summary(self, session_id: str) -> str:
         """Load the separate empirical report as context for literature synthesis."""
-        base = self.deps.cfg.data_dir.resolve()
-        path = (self.deps.cfg.session_artifact_dir(session_id) / "data_analysis" / "summary.md").resolve()
-        try:
-            path.relative_to(base)
-        except ValueError:
-            return ""
-        try:
-            return await asyncio.to_thread(path.read_text, encoding="utf-8")
-        except OSError:
-            return ""
+        report = await analysis_repo.fetch_report(self.deps.db, session_id)
+        return (report or {}).get("summary_markdown", "")
 
     async def _final_overview(self, task: Task) -> TaskResult:
         session = await sess_repo.fetch(self.deps.db, task.session_id)
@@ -647,6 +641,7 @@ class MetaReviewAgent(BaseAgent):
             top_hypotheses_block=top_block,
             sources=sources,
             dataset_summary=dataset_summary,
+            session_id=session.id,
         )
         r = route(self.deps.cfg, "metareview", "final")
         spec = AgentCallSpec(
@@ -677,11 +672,15 @@ class MetaReviewAgent(BaseAgent):
 
         # Append the dataset pointer after the split: the LLM text ends with
         # "# Sources", so appending earlier would file it under the sources.
-        if dataset_summary and "../data_analysis/summary.md" not in clean_text:
+        analysis_url = f"/api/sessions/{session.id}/analysis"
+        if (
+            await analysis_repo.fetch_report(self.deps.db, session.id)
+            and analysis_url not in clean_text
+        ):
             clean_text = clean_text.rstrip() + (
                 "\n\n## Dataset analysis\n\n"
                 "Survival statistics and plots are available in the separate "
-                "[dataset analysis summary](../data_analysis/summary.md).\n"
+                f"[dataset analysis summary]({analysis_url}).\n"
             )
 
         citations = self.extract_citations(clean_text)
@@ -694,7 +693,7 @@ class MetaReviewAgent(BaseAgent):
         overview_json_data = self._parse_overview_markdown(session.id, clean_text)
         sources_json_data = self._format_sources_json(session.id, seen_sources, parsed_bullets)
 
-        # Write ONLY synthesis.json into final/ (containing both overview and sources)
+        # The synthesis (overview and sources, cite-lines shape) lives in the database.
         synthesis_json_data = {
             "session_id": session.id,
             "generated_at": datetime.now(UTC).isoformat(),
@@ -702,15 +701,18 @@ class MetaReviewAgent(BaseAgent):
             "sources": sources_json_data,
             "sources_list": sources_json_data.get("sources", []),
         }
-        synthesis_json_path = await write_json(
-            self.deps.cfg, session.id, "final", "synthesis", synthesis_json_data
+        await syntheses_repo.save(self.deps.db, session.id, synthesis_json_data)
+        synthesis_ref = f"db:syntheses/{session.id}"
+        await timeline.post(
+            self.deps.db, session.id, kind="overview_ready",
+            title="Research overview ready", agent=self.name,
         )
 
         return TaskResult(
             kind="final_overview_generated",
             extra={
-                "overview_path": synthesis_json_path,
-                "synthesis_json_path": synthesis_json_path,
+                "overview_path": synthesis_ref,
+                "synthesis_json_path": synthesis_ref,
                 "n_top": len(top),
                 "citations": citations,
             },

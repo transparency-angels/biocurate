@@ -48,8 +48,23 @@ LIBRARY_TEXT_INDEX: dict = {
 }
 
 
-def library_vec_definition(cfg: Config) -> dict:
-    """Vector index for `library`: Atlas autoEmbed on `text`, or a client `embedding`."""
+LIBRARY_TEXT_INDEX_V2: dict = {
+    "mappings": {
+        "dynamic": False,
+        "fields": {
+            **LIBRARY_TEXT_INDEX["mappings"]["fields"],
+            "session_id": {"type": "token"},
+            "source": {"type": "token"},
+        },
+    }
+}
+
+
+def library_vec_definition(cfg: Config, *, scoped: bool = False) -> dict:
+    """Vector index for `library`: Atlas autoEmbed on `text`, or a client `embedding`.
+
+    `scoped` (the v2 index) also lets queries filter on `session_id` and `source`.
+    """
     if cfg.library.embedding == "auto":
         field = {
             "type": "autoEmbed",
@@ -64,7 +79,8 @@ def library_vec_definition(cfg: Config) -> dict:
             "numDimensions": cfg.embeddings.dim,
             "similarity": "dotProduct",
         }
-    return {"fields": [field, *_LIB_FILTERS]}
+    extra = [{"type": "filter", "path": "session_id"}, {"type": "filter", "path": "source"}]
+    return {"fields": [field, *_LIB_FILTERS, *(extra if scoped else [])]}
 
 
 def hyp_vec_definition(cfg: Config) -> dict:
@@ -87,6 +103,11 @@ SEARCH_INDEX_SPECS.extend(
     [
         SearchIndexSpec("library", "library_text", "search", lambda cfg: LIBRARY_TEXT_INDEX),
         SearchIndexSpec("library", "library_vec", "vectorSearch", library_vec_definition),
+        SearchIndexSpec("library", "library_text_v2", "search", lambda cfg: LIBRARY_TEXT_INDEX_V2),
+        SearchIndexSpec(
+            "library", "library_vec_v2", "vectorSearch",
+            lambda cfg: library_vec_definition(cfg, scoped=True),
+        ),
         SearchIndexSpec("hypothesis_vectors", "hyp_vec", "vectorSearch", hyp_vec_definition),
     ]
 )
@@ -136,6 +157,22 @@ BTREE_INDEXES: dict[str, list[IndexModel]] = {
     ],
     "library": [IndexModel([("pmcid", _A)], name="library_pmcid")],
     "hypothesis_vectors": [IndexModel([("session_id", _A)], name="hv_sess")],
+    "attachments_meta": [
+        IndexModel([("session_id", _A), ("uploaded_at", _A)], name="att_sess"),
+        IndexModel(
+            [("session_id", _A), ("sha256", _A), ("filename", _A)],
+            name="att_dedupe",
+            unique=True,
+        ),
+    ],
+    "timeline": [
+        IndexModel([("session_id", _A), ("seq", _A)], name="timeline_sess_seq", unique=True)
+    ],
+    "analysis_points": [
+        IndexModel(
+            [("session_id", _A), ("candidate_key", _A)], name="analysis_pts_key", unique=True
+        )
+    ],
 }
 
 
@@ -144,12 +181,19 @@ async def _existing_search_names(coll: Any) -> set[str]:
     return {d["name"] for d in await cur.to_list()}
 
 
-async def ensure_indexes(conn: AtlasConn, cfg: Config) -> None:
-    """Idempotently create B-tree indexes and any missing search indexes."""
+async def ensure_indexes(conn: AtlasConn, cfg: Config, *, search: bool = True) -> None:
+    """Idempotently create B-tree indexes and, unless `search=False`, missing search indexes.
+
+    Tests pass `search=False`: building search indexes on throwaway prefixed
+    collections costs minutes per test and only search tests need them.
+    """
     for name, models in BTREE_INDEXES.items():
         await conn.coll(name).create_indexes(models)
     # Pre-create so the first Elo transaction does not implicitly create it.
     await conn.ensure_collection("elo_journal")
+    await conn.ensure_collection("timeline_counters")
+    if not search:
+        return
 
     by_coll: dict[str, list[SearchIndexSpec]] = {}
     for spec in SEARCH_INDEX_SPECS:

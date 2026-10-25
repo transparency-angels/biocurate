@@ -17,14 +17,18 @@ Responsibilities:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
-from .. import ids
+from .. import ids, timeline
+from ..attachments.intake import IncomingFile
+from ..attachments.inventory import build_inventory
+from ..attachments.store import check_quota, store_incoming
 from ..config import Config
+from ..library.uploads import ingest_attachment
 from ..llm.budgets import TokenBudget
 from ..llm.prompts import render
 from ..llm.provider import get_provider
@@ -43,15 +47,17 @@ from ..orchestrator.termination import (
     should_stop,
     snapshot_top_k,
 )
+from ..safety.quoting import quote_untrusted
 from ..storage import Conn
 from ..storage import db as db_mod
-from ..storage.artifacts import write_text
-from ..storage.datasets import tabular_files
+from ..storage.atlas.client import AtlasConn
+from ..storage.repos import analysis as analysis_repo
 from ..storage.repos import events as events_repo
 from ..storage.repos import feedback as fb_repo
 from ..storage.repos import hypotheses as hyp_repo
 from ..storage.repos import reviews as rev_repo
 from ..storage.repos import sessions as sess_repo
+from ..storage.repos import syntheses as syntheses_repo
 from ..storage.repos import tasks as task_repo
 from ..tools.registry import ToolRegistry
 from .base import AgentDeps
@@ -80,11 +86,28 @@ class Supervisor:
         n_initial: int = 3,
         wall_clock_seconds: int | None = None,
         resume_session_id: str | None = None,
+        attachments: list[IncomingFile] | None = None,
+        session_id: str | None = None,
     ) -> str:
+        """Run a session to completion.
+
+        `session_id` names a session already set up by `prepare_session` (the web API
+        does that inside the request); `resume_session_id` resumes an interrupted run.
+        """
+        if session_id is not None and attachments:
+            raise ValueError("attachments belong to prepare_session when session_id is given")
         conn = await db_mod.connect(self.cfg)
         try:
             if resume_session_id is None:
-                session = await self._create_session(conn, goal, preferences_text, wall_clock_seconds)
+                if session_id is None:
+                    session = await self.prepare_session(
+                        conn, goal, preferences_text, wall_clock_seconds, attachments,
+                    )
+                else:
+                    found = await sess_repo.fetch(conn, session_id)
+                    if found is None:
+                        raise RuntimeError(f"no such session: {session_id}")
+                    session = found
                 bind(session_id=session.id)
                 log.info(
                     "session_started",
@@ -104,27 +127,20 @@ class Supervisor:
                 tools = ToolRegistry(self.cfg).discover()
                 deps = AgentDeps(cfg=self.cfg, db=conn, llm=llm, tools=tools)
 
-                plan = await self._parse_goal(deps, session, goal, preferences_text)
+                inventory = await build_inventory(conn, self.cfg, session.id)
+                plan = await self._parse_goal(deps, session, goal, preferences_text, inventory)
                 await self._apply_plan(conn, session, plan)
                 session = await sess_repo.fetch(conn, session.id)
                 assert session is not None
 
-                if plan.has_dataset or _detect_data_presence(goal, str(self.cfg.data_dir)):
-                    data_dir = str(self.cfg.data_dir)
-                    if plan.data_sources:
-                        p = Path(plan.data_sources[0]).expanduser()
-                        if not p.exists() and not p.is_absolute():
-                            p = self.cfg.data_dir / p
-                        if p.is_file():
-                            data_dir = str(p.parent)
-                        elif p.is_dir():
-                            data_dir = str(p)
-                    log.info("bootstrap_data_analysis", session_id=session.id, data_dir=data_dir)
+                if plan.has_dataset:
+                    log.info("bootstrap_data_analysis", session_id=session.id,
+                             attachments=len(plan.data_sources))
                     await task_repo.enqueue(conn, Task(
                         id=ids.task_id(), session_id=session.id,
                         created_at=datetime.now(UTC),
                         agent="data_analysis", action="ProfileDataset",
-                        payload={"data_dir": data_dir},
+                        payload={"attachment_ids": plan.data_sources},
                         priority=200, status="pending",
                         idempotency_key=f"{session.id}::data_analysis::initial",
                     ))
@@ -177,6 +193,57 @@ class Supervisor:
 
     # ----------------------------- session bootstrap ----------------------------- #
 
+    async def prepare_session(
+        self,
+        conn: Conn,
+        goal: str,
+        preferences_text: str | None = None,
+        wall_clock_seconds: int | None = None,
+        attachments: list[IncomingFile] | None = None,
+        *,
+        skipped: list[str] | None = None,
+    ) -> Session:
+        """Create the session row and store its attachments, before any agent runs.
+
+        Raises `AttachmentQuotaError` before the row exists. On Atlas, uploaded PDF and
+        DOCX files are ingested into the session-scoped library; a failed ingest marks
+        the attachment `failed` and never fails the call. `skipped` lists zip members
+        that were not stored, for the timeline.
+        """
+        files = attachments or []
+        await check_quota(conn, self.cfg, None, files)
+        session = await self._create_session(conn, goal, preferences_text, wall_clock_seconds)
+        try:
+            await self._store_attachments(conn, session.id, files, skipped or [])
+        except BaseException:
+            # Don't leave a half-created session looking like it is running.
+            with contextlib.suppress(Exception):
+                await sess_repo.set_status(conn, session.id, "failed")
+            raise
+        return session
+
+    async def _store_attachments(
+        self, conn: Conn, session_id: str, files: list[IncomingFile], skipped: list[str],
+    ) -> None:
+        stored = await store_incoming(conn, self.cfg, session_id, files)
+        if _is_atlas(conn):
+            for meta in stored:
+                if meta.kind != "document":  # parse_document reads PDF and DOCX only
+                    continue
+                try:
+                    await ingest_attachment(conn, self.cfg, meta)
+                except Exception as e:
+                    log.warning(
+                        "upload_ingest_failed", attachment_id=meta.id, error=type(e).__name__,
+                    )
+        if stored or skipped:
+            lines = [f"{a.filename} \u00b7 {a.kind} \u00b7 {a.size}" for a in stored]
+            lines += [f"Skipped: {s}" for s in skipped]
+            await timeline.post(
+                conn, session_id, kind="attachments_received",
+                title="Attachments received", body="\n".join(lines),
+            )
+
     async def _create_session(
         self,
         conn: Conn,
@@ -209,10 +276,16 @@ class Supervisor:
         session: Session,
         goal: str,
         preferences_text: str | None,
+        inventory: list[dict[str, Any]] | None = None,
     ) -> ResearchPlan:
+        inventory = inventory or []
         prompt = render(
             "parse_goal", goal=goal,
             preferences_text=preferences_text or "",
+            inventory=(
+                quote_untrusted(json.dumps(inventory, indent=1), id_="attachments")
+                if inventory else ""
+            ),
         )
         r = route(self.cfg, "parse_goal", None)
         spec = AgentCallSpec(
@@ -237,13 +310,16 @@ class Supervisor:
                     break
         if record is None:
             log.warning("parse_goal_no_record", note="falling back to bare ResearchPlan")
-            has_data = _detect_data_presence(goal, str(self.cfg.data_dir))
             return ResearchPlan(
-                objective=goal.strip(), preferences=[], idea_attributes=[], has_dataset=has_data
+                objective=goal.strip(), preferences=[], idea_attributes=[],
+                has_dataset=False, data_sources=[],
             )
-        has_dataset = bool(record.get("has_dataset", False))
-        if not has_dataset:
-            has_dataset = _detect_data_presence(goal, str(self.cfg.data_dir))
+        tabular = {e["id"] for e in inventory if e.get("kind") == "tabular"}
+        raw_sources = record.get("data_sources") or []
+        data_sources = list(dict.fromkeys(
+            s for s in raw_sources if isinstance(s, str) and s in tabular
+        ))
+        has_dataset = bool(record.get("has_dataset", False)) and bool(data_sources)
         return ResearchPlan(
             objective=record.get("objective", goal.strip()),
             preferences=record.get("preferences", []),
@@ -252,7 +328,7 @@ class Supervisor:
             domain_hint=record.get("domain_hint") or None,
             notes=record.get("notes") or None,
             has_dataset=has_dataset,
-            data_sources=record.get("data_sources", []),
+            data_sources=data_sources if has_dataset else [],
         )
 
     async def _apply_plan(
@@ -581,6 +657,10 @@ class Supervisor:
         if stop_reason != StopReason.EXTERNAL:
             await sess_repo.set_status(conn, session.id, "done")
 
+        await timeline.post(
+            conn, session.id, kind="session_done", title="Session finished",
+            body=stop_reason.value if stop_reason else "",
+        )
         await self._emit(conn, session.id, "session_done",
                          {"stop_reason": stop_reason.value if stop_reason else None})
 
@@ -594,11 +674,11 @@ class Supervisor:
             f"**Hypotheses produced.** {len(hyps)}",
             "",
         ]
-        if (self.cfg.session_artifact_dir(session.id) / "data_analysis" / "summary.md").is_file():
+        if await analysis_repo.fetch_report(conn, session.id):
             parts.extend([
                 "## Dataset analysis", "",
                 "Survival statistics and plots are available in the separate "
-                "[dataset analysis summary](../data_analysis/summary.md).", "",
+                f"[dataset analysis summary](/api/sessions/{session.id}/analysis).", "",
             ])
         if not hyps:
             parts.extend([
@@ -623,7 +703,20 @@ class Supervisor:
                     )
             parts.append("")
         body = "\n".join(parts)
-        return await write_text(self.cfg, session.id, "final", "overview", ".md", body)
+        now = datetime.now(UTC).isoformat()
+        await syntheses_repo.save(conn, session.id, {
+            "session_id": session.id,
+            "generated_at": now,
+            "overview": {"markdown": body},
+            "sources": {
+                "session_id": session.id, "generated_at": now, "total_sources": 0, "sources": [],
+            },
+            "sources_list": [],
+        })
+        await timeline.post(
+            conn, session.id, kind="overview_ready", title="Research overview ready",
+        )
+        return f"db:syntheses/{session.id}"
 
     # ----------------------------- helpers ----------------------------- #
 
@@ -677,6 +770,10 @@ class Supervisor:
 # ----------------------------- helpers ----------------------------- #
 
 
+def _is_atlas(conn: Conn) -> bool:
+    return isinstance(conn, AtlasConn)
+
+
 def _human_preference(session_id: str, text: str):
     from ..models import SystemFeedback
 
@@ -686,12 +783,3 @@ def _human_preference(session_id: str, text: str):
         source="human", kind="preference",
         target_id=None, text=text, active=True,
     )
-
-
-def _detect_data_presence(goal: str, data_dir_str: str) -> bool:
-    goal_lower = goal.lower()
-    keywords = ["dataset", "attached", "metadata", "biomarker", "patient_metadata", "treatment response", "study metadata"]
-    if any(k in goal_lower for k in keywords):
-        return True
-    return bool(tabular_files(Path(data_dir_str).expanduser()))
-

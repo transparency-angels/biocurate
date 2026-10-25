@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from .. import ids
+from .. import ids, timeline
 from ..llm.prompts import render
 from ..llm.routing import route
 from ..llm.tool_loop import ToolLoopExhausted, run_tool_loop
@@ -135,6 +135,11 @@ class ReflectionAgent(BaseAgent):
         await hyp_repo.set_state_if(
             self.deps.db, h.id, new_state="reviewed", expected_states=("draft",),
         )
+        await timeline.post(
+            self.deps.db, session.id, kind="review_completed",
+            title=f"Review: {review.verdict or 'completed'}",
+            body=_scores_line(review.scores), agent=self.name, refs=[h.id],
+        )
 
         return TaskResult(
             kind="review_completed",
@@ -142,6 +147,15 @@ class ReflectionAgent(BaseAgent):
             hypothesis_ids=[h.id],
             extra={"verdict": record.get("verdict")},
         )
+
+
+def _scores_line(scores: ReviewScores) -> str:
+    parts = [
+        f"{name} {value:.2f}"
+        for name in ("novelty", "correctness", "testability", "feasibility")
+        if (value := getattr(scores, name)) is not None
+    ]
+    return " · ".join(parts)
 
 
 def _render_review_md(record: dict[str, Any]) -> str:

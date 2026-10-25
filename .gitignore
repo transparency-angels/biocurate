@@ -1,7 +1,7 @@
 reference/*
 
 # Runtime data
-data/
+/data/
 *.db
 *.db-wal
 *.db-shm
@@ -27,11 +27,35 @@ venv/
 build/
 dist/
 
+# Frontend / Node
+node_modules/
+.npm/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
 # Editor / OS
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
 .idea/
 .vscode/
 *.swp
+*.swo
+*~
+
+# Duplicate copies (macOS Finder / copy artifacts)
+* 2.*
+* 2
+* (1).*
+* (1)
+* (2).*
+* (2)
 
 # Local-only docs (not committed)
 docs/REIMPL_VS_PAPER.md
@@ -43,5 +67,8 @@ docs/REIMPL_VS_PAPER.md
 htmlcov/
 .coverage
 
+# Tool configs
 .standard_config
+
+# Scripts
 *.sh

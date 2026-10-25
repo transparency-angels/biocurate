@@ -51,14 +51,19 @@ class BaseAgent:
 
     @staticmethod
     def _final_tool_use(response, tool_name: str) -> dict[str, Any] | None:
-        """Find the most recent tool_use block with the given name in a response.
+        """Find the most recent structured tool record in any provider response.
 
-        Returns the .input dict, or None if not present.
+        API providers expose tool calls as raw blocks. CLI providers capture the same
+        calls through MCP and expose them on ``response.capture.records`` instead.
         """
         for block in reversed(response.raw.content or []):
             if getattr(block, "type", None) == "tool_use" and getattr(block, "name", "") == tool_name:
                 inp = getattr(block, "input", None)
                 return dict(inp) if isinstance(inp, dict) else None
+        capture = getattr(response, "capture", None)
+        for name, payload in reversed(getattr(capture, "records", ()) or ()):
+            if name == tool_name and isinstance(payload, dict):
+                return dict(payload)
         return None
 
     @staticmethod

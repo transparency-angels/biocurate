@@ -194,3 +194,52 @@ def test_standalone_validator_exit_status_and_plot_artifacts(cohort: Path, monke
 def test_unknown_treatment_is_an_error(cohort: Path) -> None:
     with pytest.raises(ValueError, match="Treatments not found"):
         profile_dataset(cohort, target_drugs=["NOT_A_DRUG"])
+
+
+def test_profile_returns_points_for_significant_candidates_only(cohort: Path) -> None:
+    report = profile_dataset(cohort, target_drugs=["DRUG_A"])
+    candidates = report["candidates"]
+    assert {c["biomarker"] for c in candidates} == {"DURATION", "EVENT_ONLY"}
+    candidate = next(c for c in candidates if c["biomarker"] == "DURATION")
+    assert candidate["candidate_key"] == "DURATION|mutation|DRUG_A"
+    assert all("points" not in c for c in candidates)
+    # UNDERPOWERED is never tested, so it has no points either.
+    assert set(report["points"]) == {c["candidate_key"] for c in candidates}
+    assert "UNDERPOWERED|mutation|DRUG_A" not in report["points"]
+    points = report["points"][candidate["candidate_key"]]
+    assert {p["group"] for p in points} == {"altered", "unaltered"}
+    assert sum(p["group"] == "altered" for p in points) == candidate["altered_samples"]
+    assert sum(p["group"] == "unaltered" for p in points) == candidate["unaltered_samples"]
+    assert {p["sample_id"]: p["value"] for p in points}["S0"] == 1
+    assert all(set(p) == {"sample_id", "group", "value"} for p in points)
+
+
+def test_points_memory_bounded_by_reported_candidates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from co_scientist import analysis
+    from co_scientist.analysis import DatasetProfiler
+
+    with (tmp_path / "clinical.csv").open("w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["sample_id", "drug", "os_months", "event"])
+        for i in range(40):
+            writer.writerow([f"S{i}", "DRUG_A", (i % 4 + 1) * (1 if i < 20 else 10), i % 2 == 0])
+    with (tmp_path / "mutations.csv").open("w", newline="") as f:
+        writer = csv.writer(f)
+        genes = [f"G{j}" for j in range(30)]
+        writer.writerow(["sample_id", *genes])
+        for i in range(40):  # every gene separates the arms, so all 30 are significant
+            writer.writerow([f"S{i}", *[int(i < 20 if j % 2 else i < 21) for j in range(30)]])
+    expected = profile_dataset(tmp_path, target_drugs=["DRUG_A"])
+    monkeypatch.setattr(analysis, "MAX_CANDIDATES", 3)
+    profiler = DatasetProfiler()
+    report = profiler.profile(tmp_path, target_drugs=["DRUG_A"])
+    assert report["selection"]["nominally_significant_tests"] >= 20
+    assert len(report["candidates"]) == 3
+    assert profiler.peak_points <= 4  # the limit, plus the one being offered
+    assert len(profiler.points) <= 3
+    assert set(report["points"]) == {c["candidate_key"] for c in report["candidates"]}
+    assert [c["candidate_key"] for c in report["candidates"]] == [
+        c["candidate_key"] for c in expected["candidates"][:3]
+    ]

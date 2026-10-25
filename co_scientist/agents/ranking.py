@@ -19,7 +19,7 @@ from typing import Literal
 
 import numpy as np
 
-from .. import ids
+from .. import ids, timeline
 from ..llm.prompts import render
 from ..llm.routing import route
 from ..llm.types import AgentCallSpec, CachedBlock, CallContext
@@ -45,6 +45,10 @@ from .base import BaseAgent
 
 log = get_logger("ranking")
 
+
+# Post every match for the first MATCH_POST_EVERY of a session, then every Nth,
+# so the chat timeline does not flood.
+MATCH_POST_EVERY = 10
 
 PairMode = Literal["pairwise", "debate"]
 
@@ -148,11 +152,33 @@ class RankingAgent(BaseAgent):
             elo_b=applied.elo_b_after if applied else None,
             applied=applied is not None, similarity=similarity,
         )
+        if applied is not None:
+            await self._post_match_milestone(session.id, hyp_a, hyp_b, verdict, applied)
         return TaskResult(
             kind="tournament_match_complete",
             match_ids=[mid],
             hypothesis_ids=[hyp_a.id, hyp_b.id],
             extra={"mode": mode, "winner": verdict, "elo_applied": applied is not None},
+        )
+
+    async def _post_match_milestone(self, session_id, hyp_a, hyp_b, verdict, applied) -> None:
+        """Best-effort sampled timeline post; never fails the match."""
+        try:
+            n = await tourney_repo.count_matches(self.deps.db, session_id)
+        except Exception as e:
+            log.warning("match_count_failed", err_type=type(e).__name__)
+            return
+        if n > MATCH_POST_EVERY and n % MATCH_POST_EVERY != 0:
+            return
+        win, lose = (hyp_a, hyp_b) if verdict == "a" else (hyp_b, hyp_a)
+        await timeline.post(
+            self.deps.db, session_id, kind="match_result",
+            title=f"{win.title} beat {lose.title}",
+            body=(
+                f"Elo {applied.elo_a_before:.0f} → {applied.elo_a_after:.0f} / "
+                f"{applied.elo_b_before:.0f} → {applied.elo_b_after:.0f}"
+            ),
+            agent=self.name, refs=[hyp_a.id, hyp_b.id],
         )
 
     # ----------------------------- pair selection ----------------------------- #

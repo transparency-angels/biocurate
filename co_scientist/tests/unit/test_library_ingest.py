@@ -121,9 +121,16 @@ async def test_auto_mode_passes_no_embeddings():
 def test_library_search_specs_registered_with_default_names():
     lib = {s.name: s for s in SEARCH_INDEX_SPECS if s.collection == "library"}
     cfg = LibraryCfg()
-    assert set(lib) == {cfg.search_index, cfg.vector_index}
-    assert lib[cfg.search_index].type == "search"
-    assert lib[cfg.vector_index].type == "vectorSearch"
+    scoped = {cfg.scoped_search_index, cfg.scoped_vector_index}
+    assert set(lib) == {cfg.search_index, cfg.vector_index} | scoped
+    assert (cfg.search_index, cfg.vector_index) == ("library_text", "library_vec")
+    assert lib[cfg.search_index].type == lib[cfg.scoped_search_index].type == "search"
+    assert lib[cfg.vector_index].type == lib[cfg.scoped_vector_index].type == "vectorSearch"
+    v2 = lib[cfg.scoped_vector_index].definition(Config())["fields"]
+    assert {"type": "filter", "path": "session_id"} in v2
+    assert {"type": "filter", "path": "source"} in v2
+    t2 = lib[cfg.scoped_search_index].definition(Config())["mappings"]["fields"]
+    assert t2["session_id"] == t2["source"] == {"type": "token"}
 
 
 async def test_ingest_counts_passages_across_concurrent_papers():

@@ -82,18 +82,22 @@ class SearchLibraryTool:
             return ToolResult(
                 is_error=True, error_message=f"kind must be one of {', '.join(kinds)}"
             )
-        names = (ctx.cfg.library.search_index, ctx.cfg.library.vector_index)
+        lib_cfg = ctx.cfg.library
+        names = (lib_cfg.search_index, lib_cfg.vector_index)
+        building = (*names, lib_cfg.scoped_search_index, lib_cfg.scoped_vector_index)
         try:
             if await lib_store.count(ctx.db) == 0:
                 return ToolResult(
                     is_error=True,
                     error_message="the evidence library is empty (run `library ingest` first)",
                 )
-            hits = await hybrid_search(ctx.db, ctx.cfg, query, k=k, kind=kind)
+            hits = await hybrid_search(
+                ctx.db, ctx.cfg, query, k=k, kind=kind, session_id=ctx.session_id
+            )
             if not hits and (missing := await _unready_index(ctx.db, names)):
                 return _not_ready(missing)
         except PyMongoError as e:
-            if (name := _building_index(e, names)) is not None:
+            if (name := _building_index(e, building)) is not None:
                 return _not_ready(name)
             log.warning("search_library_failed", error=type(e).__name__)
             return ToolResult(

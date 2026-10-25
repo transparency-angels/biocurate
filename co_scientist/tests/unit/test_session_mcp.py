@@ -172,6 +172,37 @@ async def test_overview_get_says_why_it_is_missing(
     assert "no final overview yet" in body["error"]
 
 
+async def test_overview_get_reads_a_db_ref(server: SessionMcpServer, tmp_cfg: Config) -> None:
+    from co_scientist.storage.repos import syntheses as syn_repo
+
+    sid = await _make_session(tmp_cfg)
+    conn = await db_mod.connect(tmp_cfg)
+    try:
+        await syn_repo.save(conn, sid, {"overview": {"markdown": "# Stored overview"},
+                                        "sources": {}, "sources_list": []})
+        await sess_repo.set_final_overview(conn, sid, f"db:syntheses/{sid}")
+    finally:
+        await conn.close()
+    body = await call(server, "overview_get", session_id=sid)
+    assert not body["_is_error"]
+    assert body["overview_markdown"] == "# Stored overview"
+    assert body["path"] == f"db:syntheses/{sid}"
+
+
+async def test_overview_get_db_ref_without_synthesis_is_an_error(
+    server: SessionMcpServer, tmp_cfg: Config
+) -> None:
+    sid = await _make_session(tmp_cfg)
+    conn = await db_mod.connect(tmp_cfg)
+    try:
+        await sess_repo.set_final_overview(conn, sid, f"db:syntheses/{sid}")
+    finally:
+        await conn.close()
+    body = await call(server, "overview_get", session_id=sid)
+    assert body["_is_error"]
+    assert "is missing" in body["error"]
+
+
 # --------------------------------------------------------------------------- #
 # review_record
 

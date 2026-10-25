@@ -12,7 +12,7 @@ from typing import Any
 
 import numpy as np
 
-from .. import ids
+from .. import ids, timeline
 from ..llm.prompts import render
 from ..llm.routing import route
 from ..llm.tool_loop import ToolLoopExhausted, run_tool_loop
@@ -225,6 +225,11 @@ class GenerationAgent(BaseAgent):
             state="draft",
         )
         inserted = await hyp_repo.insert(self.deps.db, h)
+        if inserted:
+            await timeline.post(
+                self.deps.db, session_id, kind="hypothesis_created", title=h.title,
+                body=_first_sentence(h.summary), agent=self.name, refs=[hid],
+            )
 
         # Step 3: only add to the vector store if we actually inserted a new row, so it and
         # the hypotheses table can never disagree (FK in embeddings_meta enforces it).
@@ -298,6 +303,12 @@ class GenerationAgent(BaseAgent):
 # helpers
 
 
+def _first_sentence(text: str, limit: int = 200) -> str:
+    """The opening sentence of a summary, capped for a short timeline body."""
+    paragraph = text.strip().split("\n\n", 1)[0]
+    return paragraph.split(". ", 1)[0].strip()[:limit]
+
+
 def _filter_to_seen_urls(
     citations: list[dict[str, Any]], seen: Iterable[str]
 ) -> list[dict[str, Any]]:
@@ -360,4 +371,7 @@ def _build_session_context(goal: str, plan: ResearchPlan, sys_feedback_text: str
 
 async def _latest_system_feedback(deps: AgentDeps, session_id: str) -> str | None:
     fb = await fb_repo.latest_system_feedback(deps.db, session_id)
-    return fb.text if fb is not None else None
+    directives = await fb_repo.active_for_session(deps.db, session_id)
+    human = [f.text for f in directives if f.source == "human" and f.kind == "directive"][:8]
+    parts = ([fb.text] if fb is not None else []) + list(reversed(human))
+    return "\n\n".join(parts) if parts else None

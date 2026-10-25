@@ -290,7 +290,7 @@ async def test_search_library_through_tool_loop_reaches_hybrid_search(monkeypatc
     )
     seen: dict = {}
 
-    async def fake_search(conn, cfg, query, *, k=8, kind=None):
+    async def fake_search(conn, cfg, query, *, k=8, kind=None, session_id=None):
         seen["conn"] = conn
         return [hit]
 

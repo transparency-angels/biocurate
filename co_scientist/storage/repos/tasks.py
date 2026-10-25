@@ -17,3 +17,4 @@ cancel_pending_for_session = dual(
 )
 reclaim_expired_leases = dual(_sql.reclaim_expired_leases, _atlas.reclaim_expired_leases)
 count_by_status = dual(_sql.count_by_status, _atlas.count_by_status)
+list_for_session = dual(_sql.list_for_session, _atlas.list_for_session)

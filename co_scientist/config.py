@@ -51,6 +51,9 @@ class LibraryCfg(BaseModel):
     rerank_model: str = "rerank-2.5"
     search_index: str = "library_text"
     vector_index: str = "library_vec"
+    scoped_search_index: str = "library_text_v2"
+    scoped_vector_index: str = "library_vec_v2"
+    """v2 indexes add `session_id`/`source` filter fields; used once both are queryable."""
     max_passage_chars: int = 2000
 
 
@@ -381,6 +384,15 @@ class WebUICfg(BaseModel):
     port: int = 7878
 
 
+class AttachmentsCfg(BaseModel):
+    max_files: int = 5
+    max_file_mb: int = 25
+    max_unzipped_mb: int = 512
+    max_zip_members: int = 50
+    max_session_mb: int = 512
+    max_total_mb: int = 2048
+
+
 class Secrets(BaseSettings):
     """Secrets pulled from env only. Empty string means 'not configured'.
 
@@ -433,6 +445,7 @@ class Config(BaseModel):
     safety: SafetyCfg = Field(default_factory=SafetyCfg)
     llm: LLMCfg = Field(default_factory=LLMCfg)
     web_ui: WebUICfg = Field(default_factory=WebUICfg)
+    attachments: AttachmentsCfg = Field(default_factory=AttachmentsCfg)
     secrets: Secrets = Field(default_factory=Secrets)
 
     # Absolute path of the `-c` overlay this Config was loaded with. Private, so it

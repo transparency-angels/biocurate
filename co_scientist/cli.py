@@ -18,6 +18,7 @@ from rich.table import Table
 
 from .config import load_config
 from .logging import get_logger, setup_logging
+from .overview import load_overview_markdown
 from .storage import db as db_mod
 from .storage.repos import hypotheses as hyp_repo
 from .storage.repos import sessions as sess_repo
@@ -36,6 +37,8 @@ library_app = typer.Typer(
     help="Evidence library (Europe PMC full text on Atlas).", no_args_is_help=True
 )
 app.add_typer(library_app, name="library")
+attachments_app = typer.Typer(help="Uploaded attachment storage.", no_args_is_help=True)
+app.add_typer(attachments_app, name="attachments")
 
 console = Console()
 log = get_logger("cli")
@@ -334,6 +337,9 @@ def run(
     concurrency: int | None = typer.Option(
         None, "--concurrency", help="Override worker concurrency."
     ),
+    attach: list[Path] | None = typer.Option(
+        None, "--attach", help="Attach a file or .zip (repeatable).",
+    ),
 ) -> None:
     """Start a fresh research session. Generation → Reflection → Ranking tournament → Meta-review."""
     cfg, _ = ctx.obj
@@ -359,12 +365,27 @@ def run(
 
     prefs = preferences_file.read_text(encoding="utf-8") if preferences_file else None
     from .agents.supervisor import Supervisor
+    from .attachments.intake import IntakeError, accept_uploads
+    from .attachments.store import AttachmentQuotaError
+
+    incoming = None
+    try:
+        if attach:
+            uploads = [(p.name, p.read_bytes(), "") for p in attach]
+            incoming = accept_uploads(uploads, cfg.attachments).files
+    except (IntakeError, OSError) as exc:
+        console.print(f"[red]Cannot attach files: {exc}[/red]")
+        raise typer.Exit(2) from exc
 
     sup = Supervisor(cfg)
-    session_id = asyncio.run(
-        sup.run_session(goal, preferences_text=prefs, n_initial=n_initial,
-                        wall_clock_seconds=wall_clock)
-    )
+    try:
+        session_id = asyncio.run(
+            sup.run_session(goal, preferences_text=prefs, n_initial=n_initial,
+                            wall_clock_seconds=wall_clock, attachments=incoming)
+        )
+    except AttachmentQuotaError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2) from exc
     console.print(f"[green]Done.[/green] session={session_id}")
     console.print(f"View report:  co-scientist report {session_id}")
 
@@ -420,6 +441,56 @@ def abort(ctx: typer.Context, session_id: str = typer.Argument(...)) -> None:
     console.print(f"[red]Aborted[/red] session={session_id}")
 
 
+@attachments_app.command("prune")
+def attachments_prune(
+    ctx: typer.Context,
+    older_than: int = typer.Option(
+        ..., "--older-than", min=0, help="Delete attachments uploaded more than DAYS ago."
+    ),
+    yes: bool = typer.Option(False, "--yes", help="Delete; without it, only list."),
+) -> None:
+    """Delete old uploaded attachments (file, metadata, library passages). Dry run by default."""
+    from datetime import timedelta
+
+    from .storage.atlas.client import AtlasConn
+    from .storage.repos import attachments as att_repo
+    from .storage.repos import blobs
+
+    cfg, _ = ctx.obj
+    cutoff = datetime.now(UTC) - timedelta(days=older_than)
+
+    async def _do() -> int:
+        conn = await db_mod.connect(cfg)
+        try:
+            old = await att_repo.older_than(conn, cutoff)
+            if not old:
+                console.print(f"No attachments older than {older_than} days.")
+                return 0
+            table = Table("id", "session", "file", "size", "uploaded")
+            for a in old:
+                table.add_row(a.id, a.session_id, a.filename, str(a.size),
+                              a.uploaded_at.isoformat(timespec="seconds"))
+            console.print(table)
+            if not yes:
+                console.print(f"Dry run: {len(old)} attachment(s) would be deleted. "
+                              "Re-run with --yes to delete.")
+                return 0
+            for a in old:
+                if isinstance(conn, AtlasConn) and a.kind == "document":
+                    from .library.uploads import upload_pmcid
+                    from .storage.atlas import library as lib_store
+
+                    await lib_store.delete_paper(conn, upload_pmcid(a.id))
+                await blobs.delete(conn, "attachments", a.blob_id)
+                await att_repo.delete(conn, a.id)
+            console.print(f"Deleted {len(old)} attachment(s).")
+            return len(old)
+        finally:
+            await conn.close()
+
+    asyncio.run(_do())
+
+
 @app.command()
 def feedback(
     ctx: typer.Context,
@@ -471,32 +542,25 @@ def report(
     """Print the final research overview for a session (when available)."""
     cfg, _ = ctx.obj
 
-    async def _path() -> Path | None:
+    async def _load() -> tuple[str, str] | None:
         conn = await db_mod.connect(cfg)
         try:
             session = await sess_repo.fetch(conn, session_id)
             if session is None or not session.final_overview:
                 return None
-            return cfg.data_dir / session.final_overview
+            md = await load_overview_markdown(conn, cfg, session)
+            return None if md is None else (session.final_overview, md)
         finally:
             await conn.close()
 
-    p = asyncio.run(_path())
-    if p is None:
+    loaded = asyncio.run(_load())
+    if loaded is None:
         console.print(f"[red]No final overview yet for {session_id}[/red]")
         raise typer.Exit(1)
-    content = p.read_text(encoding="utf-8")
+    ref, text = loaded
     if format == "json":
-        console.print_json(data={"session_id": session_id, "path": str(p), "content": content})
+        console.print_json(data={"session_id": session_id, "path": ref, "content": text})
     else:
-        if p.suffix == ".json":
-            try:
-                data = json.loads(content)
-                text = data.get("overview", {}).get("markdown") or data.get("markdown") or content
-            except Exception:
-                text = content
-        else:
-            text = content
         console.print(text)
 
 
