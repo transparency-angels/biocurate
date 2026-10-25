@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import quote
 
+import anyio
 from fastapi import (
     APIRouter,
     BackgroundTasks,
@@ -52,6 +53,7 @@ from ..models import SystemFeedback
 from ..orchestrator.events import GLOBAL_BUS
 from ..overview import DB_PREFIX, load_overview_markdown
 from ..storage import db as db_mod
+from ..storage import watch as watch_mod
 from ..storage.atlas.client import AtlasConn
 from ..storage.repos import analysis as analysis_repo
 from ..storage.repos import attachments as att_repo
@@ -406,7 +408,9 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         ]})
 
     @api.get("/events")
-    async def api_events(session_id: str) -> EventSourceResponse:
+    async def api_events(session_id: str, request: Request) -> EventSourceResponse:
+        start = _timeline_start(request)
+
         async def _stream() -> AsyncIterator[dict[str, Any]]:
             # Replay last 25 events from DB so refreshes don't go blank.
             conn = await db_mod.connect(cfg)
@@ -415,16 +419,15 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             finally:
                 await conn.close()
             for ev in reversed(history):
+                if ev["event"] == TIMELINE_EVENT:
+                    continue  # the watcher below is the timeline's source of truth
                 yield {
                     "event": ev["event"],
                     "data": json.dumps({"payload": ev["payload"], "ts": ev["ts"]}),
                 }
-            async with contextlib.aclosing(GLOBAL_BUS.subscribe(session_id)) as gen:
-                async for ev in gen:
-                    yield {
-                        "event": ev.name,
-                        "data": ev.to_json(),
-                    }
+            async with contextlib.aclosing(_live_events(cfg, session_id, start)) as live:
+                async for item in live:
+                    yield item
 
         return EventSourceResponse(_stream())
 
@@ -555,6 +558,92 @@ def create_app(cfg: Config | None = None) -> FastAPI:
 
 
 # ----------------------------- helpers ----------------------------- #
+
+
+TIMELINE_EVENT = "timeline_message"
+_LIVE_QUEUE_MAX = 256
+
+
+def _timeline_start(request: Request) -> int:
+    """Where the timeline resumes: `?after_seq=`, else `Last-Event-ID`, else 0.
+
+    A non-integer or negative value counts as 0 (resend everything).
+    """
+    raw = request.query_params.get("after_seq")
+    if raw is None:
+        raw = request.headers.get("last-event-id")
+    try:
+        return max(int(raw), 0) if raw is not None else 0
+    except ValueError:
+        return 0
+
+
+async def _live_events(cfg: Config, session_id: str, start: int) -> AsyncIterator[dict[str, Any]]:
+    """Merge the in-process bus with the DB timeline watcher into SSE events.
+
+    Two pump tasks feed one queue. `timeline_message` can arrive from both (a
+    post in this process publishes on the bus; the watcher sees the same row,
+    and on Atlas also rows written by other processes), so it is deduped by
+    `seq` with a set: the two sources interleave, so a high-water mark would
+    drop a lower `seq` that arrives late. Every timeline event carries
+    `id: <seq>` so an EventSource reconnect resumes via `Last-Event-ID`.
+
+    If the watcher fails (e.g. the change stream dies), its error type is
+    logged and the timeline part ends; bus events, including in-process
+    timeline posts, keep flowing. On exit, both pumps are cancelled and awaited
+    and the watcher's own connection is closed, shielded from the cancellation
+    that a client disconnect delivers.
+    """
+    queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue(maxsize=_LIVE_QUEUE_MAX)
+
+    async def pump_bus() -> None:
+        async with contextlib.aclosing(GLOBAL_BUS.subscribe(session_id)) as gen:
+            async for ev in gen:
+                await queue.put(("bus", ev))
+
+    async def pump_timeline(wconn: Any) -> None:
+        try:
+            follow = watch_mod.timeline_after(wconn, session_id, start)
+            async with contextlib.aclosing(follow) as gen:
+                async for m in gen:
+                    await queue.put(("timeline", to_payload(m)))
+        except Exception as e:  # never str() it: PyMongo messages can carry hosts
+            log.warning("timeline_watch_failed", session_id=session_id,
+                        err_type=type(e).__name__)
+
+    wconn: Any = None
+    tasks = [asyncio.create_task(pump_bus())]
+    try:
+        try:
+            wconn = await db_mod.connect(cfg)
+        except Exception as e:
+            log.warning("timeline_watch_failed", session_id=session_id,
+                        err_type=type(e).__name__)
+        else:
+            tasks.append(asyncio.create_task(pump_timeline(wconn)))
+        seen: set[int] = set()
+        while True:
+            src, item = await queue.get()
+            if src == "bus" and item.name != TIMELINE_EVENT:
+                yield {"event": item.name, "data": item.to_json()}
+                continue
+            payload = item if src == "timeline" else item.payload
+            seq = payload.get("seq")
+            if not isinstance(seq, int) or seq <= start or seq in seen:
+                continue
+            seen.add(seq)
+            yield {
+                "event": TIMELINE_EVENT,
+                "id": str(seq),
+                "data": json.dumps(payload, ensure_ascii=False),
+            }
+    finally:
+        with anyio.CancelScope(shield=True):
+            for t in tasks:
+                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            if wconn is not None:
+                await wconn.close()
 
 
 def _legacy_json(cfg: Config, session_id: str, name: str) -> dict[str, Any] | None:
