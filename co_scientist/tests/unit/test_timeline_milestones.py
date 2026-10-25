@@ -110,6 +110,39 @@ async def test_reflection_posts_review_completed(tmp_cfg, conn, monkeypatch) -> 
     assert list(m.refs) == ["hyp_r"]
 
 
+async def test_reflection_result_unchanged_when_post_fails(tmp_cfg, conn, monkeypatch) -> None:
+    from co_scientist.agents import reflection as ref_mod
+
+    s, deps = await _setup(tmp_cfg, conn)
+    for hid in ("hyp_ok", "hyp_boom"):
+        assert await hyp_repo.insert(conn, Hypothesis(
+            id=hid, session_id=s.id, created_at=datetime.now(UTC), created_by="generation",
+            strategy="literature", title="t", summary="s", full_text="f", artifact_path="a",
+        ))
+    record = {"verdict": "missing_piece", "novelty": 0.8, "evidence": []}
+    resp = SimpleNamespace(response=object(), seen_urls=set())
+    monkeypatch.setattr(ref_mod, "run_tool_loop", AsyncMock(return_value=resp))
+    monkeypatch.setattr(ReflectionAgent, "_final_tool_use", lambda self, r, n: dict(record))
+    deps.tools.anthropic_tools_for.return_value = []
+
+    def task(hid: str):
+        return SimpleNamespace(id="tsk_1", session_id=s.id, payload={}, target_id=hid)
+
+    expected = await ReflectionAgent(deps).execute(task("hyp_ok"))
+
+    async def boom(*a, **kw):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(timeline_repo, "append", boom)
+    got = await ReflectionAgent(deps).execute(task("hyp_boom"))
+
+    assert got.kind == expected.kind == "review_completed"
+    assert got.extra == expected.extra == {"verdict": "missing_piece"}
+    assert len(got.review_ids) == len(expected.review_ids) == 1
+    assert got.hypothesis_ids == ["hyp_boom"] and expected.hypothesis_ids == ["hyp_ok"]
+    assert [m.refs for m in await _msgs(conn, s.id)] == [["hyp_ok"]]
+
+
 def _h(hid: str) -> Hypothesis:
     return Hypothesis(
         id=hid, session_id="ses", created_at=datetime.now(UTC), created_by="generation",
