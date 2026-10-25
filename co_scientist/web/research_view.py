@@ -21,12 +21,22 @@ _UPLOAD = "upload://"
 _HEADING = re.compile(r"^#{1,6}\s")
 
 
-def select_hypotheses(hypotheses: Iterable[Hypothesis]) -> list[Hypothesis]:
-    """Tournament and pinned hypotheses (plus reviewed ones before the tournament), by Elo."""
+def select_hypotheses(
+    hypotheses: Iterable[Hypothesis], *, include_drafts: bool = False,
+) -> list[Hypothesis]:
+    """Tournament and pinned hypotheses (plus pre-tournament reviews), by Elo.
+
+    Live progress views can additionally request drafts so a newly generated idea is
+    visible before Reflection has reviewed it.
+    """
     hyps = list(hypotheses)
     states = set(SHOWN_STATES)
-    if not any(h.state == "in_tournament" for h in hyps):
+    if include_drafts:
         states.add("reviewed")
+    elif not any(h.state == "in_tournament" for h in hyps):
+        states.add("reviewed")
+    if include_drafts:
+        states.add("draft")
     chosen = [h for h in hyps if h.state in states]
     return sorted(chosen, key=lambda h: (h.elo is None, -(h.elo or 0.0)))
 
@@ -147,6 +157,7 @@ def to_research_session(
     report: Mapping[str, Any] | None,
     points_by_key: Mapping[str, Mapping[str, Any]],
     *,
+    include_drafts: bool = False,
     journals: Mapping[str, str] | None = None,
     attachments: Mapping[str, tuple[str, str]] | None = None,
 ) -> dict[str, Any]:
@@ -163,7 +174,7 @@ def to_research_session(
     for rank, h in enumerate(select_hypotheses(hypotheses), 1):
         abstract, explanation = _split_text(h.full_text)
         summary, points = _data(h, candidates, points_by_key)
-        out.append({
+        mapped = {
             "id": h.id, "rank": rank, "title": h.title, "summary": h.summary,
             "abstract": abstract, "explanation": explanation,
             "dataSummary": summary, "dataPoints": points,
@@ -171,5 +182,9 @@ def to_research_session(
                 _source(h.id, n, c, journals or {}, attachments or {})
                 for n, c in enumerate(h.citations, 1)
             ],
-        })
+        }
+        if include_drafts:
+            mapped["state"] = h.state
+            mapped["createdAt"] = h.created_at.isoformat()
+        out.append(mapped)
     return {"id": session_id, "isDemo": False, "hypotheses": out}

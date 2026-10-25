@@ -1,4 +1,4 @@
-import { GitMerge, Lightbulb, Network, ScrollText, SearchCheck, Trophy, type LucideIcon } from 'lucide-react'
+import { BarChart3, GitMerge, Lightbulb, Network, ScrollText, SearchCheck, Trophy, type LucideIcon } from 'lucide-react'
 import type { AgentName } from '@/types/researchEvents'
 
 export interface AgentInfo {
@@ -13,4 +13,5 @@ export const AGENT_INFO: Record<AgentName, AgentInfo> = {
   evolution: { icon: GitMerge, description: 'Combines, improves and refines hypotheses.' },
   proximity: { icon: Network, description: 'Identifies similar or duplicate hypotheses.' },
   metareview: { icon: ScrollText, description: 'Summarises the research process and final findings.' },
+  data_analysis: { icon: BarChart3, description: 'Profiles and analyses the dataset you provided.' },
 }

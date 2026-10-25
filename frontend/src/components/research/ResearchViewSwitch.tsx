@@ -14,6 +14,7 @@ export function ResearchViewSwitch({ sessionId }: ResearchViewSwitchProps) {
   const { pathname } = useLocation()
   const views = [
     { label: 'Hypotheses', to: `/research/${sessionId}/results` },
+    { label: 'Dataset analysis', to: `/research/${sessionId}/data` },
     { label: 'Research overview', to: `/research/${sessionId}/overview` },
   ]
 

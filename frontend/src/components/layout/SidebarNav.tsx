@@ -1,8 +1,10 @@
-import { Link, matchPath, useLocation } from 'react-router'
-import { SquarePen } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Link, matchPath, useLocation, useParams } from 'react-router'
+import { Activity, ChartColumn, ListOrdered, ScrollText, SquarePen } from 'lucide-react'
 import { useNewResearch } from '@/features/research/useNewResearch'
+import { readCurrentSession, subscribeCurrentSession } from '@/features/research/currentSession'
 import { cn } from '@/lib/utils'
-import { NAV_DESTINATIONS } from './navigation'
+import { NAV_DESTINATIONS, type NavDestination } from './navigation'
 
 interface SidebarNavProps {
   collapsed?: boolean
@@ -22,12 +24,23 @@ const itemClass = (active: boolean, collapsed: boolean) =>
 
 export function SidebarNav({ collapsed = false, onNavigate }: SidebarNavProps) {
   const { pathname } = useLocation()
+  const { sessionId } = useParams()
+  const [currentSession, setCurrentSession] = useState(readCurrentSession)
+  useEffect(() => subscribeCurrentSession(() => setCurrentSession(readCurrentSession())), [])
+  const activeSessionId = sessionId ?? currentSession?.id
+  const sessionItems: NavDestination[] = activeSessionId ? [
+    { label: 'Research progress', to: `/research/${activeSessionId}/progress`, icon: Activity, activePattern: '/research/:sessionId/progress' },
+    { label: 'Research results', to: `/research/${activeSessionId}/results`, icon: ListOrdered, activePattern: '/research/:sessionId/results' },
+    { label: 'Dataset analysis', to: `/research/${activeSessionId}/data`, icon: ChartColumn, activePattern: '/research/:sessionId/data' },
+    { label: 'Research overview', to: `/research/${activeSessionId}/overview`, icon: ScrollText, activePattern: '/research/:sessionId/overview' },
+  ] : []
+  const destinations = [...NAV_DESTINATIONS, ...sessionItems]
   const startNewResearch = useNewResearch()
 
   return (
     <nav aria-label="Main">
       <ul className="flex flex-col gap-0.5">
-        {NAV_DESTINATIONS.map((item) => {
+        {destinations.map((item) => {
           const active = item.activePattern
             ? matchPath(item.activePattern, pathname) !== null
             : pathname === item.to
@@ -37,23 +50,12 @@ export function SidebarNav({ collapsed = false, onNavigate }: SidebarNavProps) {
               <Link
                 to={item.to}
                 aria-current={active ? 'page' : undefined}
-                title={collapsed ? [item.label, item.tag && `(${item.tag.toLowerCase()})`].filter(Boolean).join(' ') : undefined}
+                title={collapsed ? item.label : undefined}
                 onClick={onNavigate}
                 className={itemClass(active, collapsed)}
               >
                 <Icon aria-hidden="true" className="size-[1.125rem] shrink-0" strokeWidth={1.75} />
                 <span className={cn('truncate', collapsed && 'sr-only')}>{item.label}</span>
-                {/* Quiet by design: the badge marks demo content without competing with the label */}
-                {item.tag && (
-                  <span
-                    className={cn(
-                      'ml-auto flex-none text-[0.6875rem] leading-4 font-normal text-faint',
-                      collapsed && 'sr-only',
-                    )}
-                  >
-                    {item.tag}
-                  </span>
-                )}
               </Link>
             </li>
           )

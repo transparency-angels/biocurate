@@ -220,3 +220,11 @@ async def count_by_status(conn: AtlasConn, session_id: str) -> dict[str, int]:
         ]
     )
     return {d["_id"]: d["n"] async for d in cur}
+
+
+async def list_for_session(conn: AtlasConn, session_id: str) -> list[Task]:
+    """All tasks for reconstructing a session's progress after a client reconnects."""
+    cur = conn.coll(_COLL).find({"session_id": session_id}).sort(
+        [("created_at", 1), ("_id", 1)]
+    )
+    return [_from_doc(d) async for d in cur]

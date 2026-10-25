@@ -1,5 +1,4 @@
-import { Activity, House, ListOrdered, ScrollText, type LucideIcon } from 'lucide-react'
-import { DEMO_OVERVIEW_PATH, DEMO_PROGRESS_PATH, DEMO_RESULTS_PATH } from '@/features/research/demoQuestion'
+import { House, type LucideIcon } from 'lucide-react'
 
 export interface NavDestination {
   label: string
@@ -13,25 +12,4 @@ export interface NavDestination {
 
 export const NAV_DESTINATIONS: NavDestination[] = [
   { label: 'Home', to: '/', icon: House },
-  {
-    label: 'Research progress',
-    to: DEMO_PROGRESS_PATH,
-    icon: Activity,
-    tag: 'Demo',
-    activePattern: '/research/:sessionId/progress',
-  },
-  {
-    label: 'Research results',
-    to: DEMO_RESULTS_PATH,
-    icon: ListOrdered,
-    tag: 'Demo',
-    activePattern: '/research/:sessionId/results',
-  },
-  {
-    label: 'Research overview',
-    to: DEMO_OVERVIEW_PATH,
-    icon: ScrollText,
-    tag: 'Demo',
-    activePattern: '/research/:sessionId/overview',
-  },
 ]

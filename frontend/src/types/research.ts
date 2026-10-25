@@ -32,6 +32,8 @@ export interface DataSummary {
 export interface Hypothesis {
   id: string
   rank: number
+  state?: 'draft' | 'reviewed' | 'in_tournament' | 'pinned' | 'rejected' | 'quarantined' | 'retired'
+  createdAt?: string
   title: string
   summary: string
   abstract: string

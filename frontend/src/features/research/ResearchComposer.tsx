@@ -5,8 +5,6 @@ import { cn } from '@/lib/utils'
 import {
   ACCEPT_ATTRIBUTE,
   ACCEPTED_FORMATS_LABEL,
-  MAX_ATTACHMENTS,
-  MAX_FILE_BYTES,
   addAttachments,
   formatBytes,
   type Attachment,
@@ -57,8 +55,8 @@ export function ResearchComposer({ onSubmit }: ResearchComposerProps) {
       await onSubmit({ question: question.trim(), files: attachments.map((a) => a.file) })
       setQuestion('')
       setAttachments([])
-    } catch {
-      setProblems(['Your question could not be submitted. Please try again.'])
+    } catch (error) {
+      setProblems([error instanceof Error ? error.message : 'Your question could not be submitted. Please try again.'])
     } finally {
       setPending(false)
       textareaRef.current?.focus()
@@ -157,7 +155,7 @@ export function ResearchComposer({ onSubmit }: ResearchComposerProps) {
             size="icon-lg"
             className="size-11 shrink-0 rounded-full text-muted-foreground hover:bg-muted hover:text-foreground [&_svg:not([class*='size-'])]:size-5"
             aria-label="Attach research documents"
-            title={`Attach up to ${MAX_ATTACHMENTS} ${ACCEPTED_FORMATS_LABEL} files, ${formatBytes(MAX_FILE_BYTES)} each`}
+            title={`Attach ${ACCEPTED_FORMATS_LABEL} files or a ZIP archive`}
             disabled={pending}
             onClick={() => fileInputRef.current?.click()}
           >

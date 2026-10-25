@@ -49,7 +49,8 @@ even for a session that could never exist; a well-formed but unknown id gives 40
 |---|---|---|
 | POST | `/api/sessions` | Start a research session, optionally with files |
 | GET | `/api/sessions/{id}` | The raw session row |
-| GET | `/api/sessions/{id}/research` | The ranked hypotheses in the `ResearchSession` shape |
+| GET | `/api/sessions/{id}/progress` | Durable progress snapshot for restoring elapsed time and agent task statuses after reconnect |
+| GET | `/api/sessions/{id}/research` | The ranked hypotheses in the `ResearchSession` shape; `?include_drafts=true` also returns generated and reviewed hypotheses for live progress |
 | GET | `/api/sessions/{id}/timeline` | Progress messages |
 | GET | `/api/sessions/{id}/events` | Live stream (SSE) |
 | GET | `/api/sessions/{id}/overview` | The final overview |
@@ -153,7 +154,7 @@ budget fields, `final_overview`, timestamps and so on. `status` is one of
 
 Errors: 404 if the session does not exist (`detail` is FastAPI's default `Not Found`).
 
-### `GET /api/sessions/{id}/research`
+### `GET /api/sessions/{id}/research[?include_drafts=true]`
 
 The ranked hypotheses, already in the `ResearchSession` shape from
 `frontend/src/types/research.ts`. Replaces the mock data in the results page.
@@ -204,6 +205,11 @@ Notes:
   file name, and `evidenceType: "Dataset"` when the file was tabular.
 - `url` is `null` whenever the stored link is not a real `http(s)` URL.
 - `isDemo` is always `false` here.
+
+For the live progress view, `include_drafts=true` includes hypotheses as soon as
+Generation saves them, before Reflection has reviewed them. Each hypothesis has a
+`state` (`draft`, `reviewed`, `in_tournament`, `pinned`, etc.). The default remains
+the ranked results view and omits unreviewed drafts.
 
 Errors: 404 `session not found`.
 

@@ -19,11 +19,13 @@ export const AGENT_NAMES = [
   'evolution',
   'proximity',
   'metareview',
+  'data_analysis',
 ] as const
 export type AgentName = (typeof AGENT_NAMES)[number]
 
 /** TaskAction in models/task.py */
 export type TaskAction =
+  | 'ProfileDataset'
   | 'CreateInitialHypotheses'
   | 'GenerateFromFeedback'
   | 'DirectGeneration'

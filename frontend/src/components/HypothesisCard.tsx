@@ -21,15 +21,15 @@ export function HypothesisCard({ hypothesis, selected, controls, onSelect }: Hyp
         'flex w-full items-start gap-3.5 rounded-xl border p-4 text-left transition-colors outline-none',
         'focus-visible:ring-3 focus-visible:ring-ring/50',
         selected
-          ? 'border-input bg-accent'
-          : 'border-border bg-card hover:border-input hover:bg-secondary',
+          ? 'border-brand/35 bg-brand/[0.045] shadow-sm shadow-brand/5'
+          : 'border-border/80 bg-card hover:border-input hover:bg-secondary/70',
       )}
     >
       <span
         aria-hidden="true"
         className={cn(
           'flex size-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold tabular-nums',
-          selected ? 'bg-brand/20 text-brand' : 'bg-muted text-muted-foreground',
+          selected ? 'bg-brand text-brand-foreground shadow-sm' : 'bg-muted text-muted-foreground',
         )}
       >
         {hypothesis.rank}

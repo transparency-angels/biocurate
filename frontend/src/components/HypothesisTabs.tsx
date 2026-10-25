@@ -9,7 +9,7 @@ import { SourcesTab } from './tabs/SourcesTab'
 export type HypothesisTab = 'evaluation' | 'data' | 'sources'
 
 const TABS = [
-  { value: 'evaluation', label: 'Evaluation', icon: FileText },
+  { value: 'evaluation', label: 'Hypothesis', icon: FileText },
   { value: 'data', label: 'Data', icon: ChartColumn },
   { value: 'sources', label: 'Sources', icon: Link2 },
 ] as const satisfies { value: HypothesisTab; label: string; icon: unknown }[]

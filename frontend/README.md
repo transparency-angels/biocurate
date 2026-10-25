@@ -1,75 +1,35 @@
-# React + TypeScript + Vite
+# BioCurate frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+The React app talks to the Co-Scientist API. It submits the research question and
+any selected files to `POST /api/sessions`, then reads progress, hypotheses and
+the final synthesis from that session. It does not include sample research data.
 
-Currently, two official plugins are available:
+## Run locally
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Start the backend from the repository root in one terminal:
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
+```bash
+source .venv/bin/activate
+co-scientist serve
 ```
 
-You can also install [eslint-plugin-react-x](https://npmx.dev/package/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://npmx.dev/package/eslint-plugin-react-dom) for React-specific lint rules:
+The API listens on `http://127.0.0.1:7878`. Configure a model provider first as
+described in the root [quickstart](../README.md#quickstart), then run
+`co-scientist init` and `co-scientist doctor` if this is a new checkout.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+In a second terminal:
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
+```bash
+cd frontend
+npm install
+npm run dev
 ```
+
+Open the URL Vite prints (usually `http://localhost:5173`). The Vite dev server
+proxies `/api` and `/healthz` to the backend on port 7878. Upload supported
+research files in the composer; the backend validates configured attachment
+limits and reports any intake errors in the UI. Supported formats are PDF,
+DOCX, CSV, TXT and ZIP archives of supported files.
+
+See [the frontend API guide](../docs/frontend-api.md) for endpoint and data
+details.

@@ -64,6 +64,7 @@ from ..storage.repos import hypotheses as hyp_repo
 from ..storage.repos import reviews as rev_repo
 from ..storage.repos import sessions as sess_repo
 from ..storage.repos import syntheses as syntheses_repo
+from ..storage.repos import tasks as task_repo
 from ..storage.repos import timeline as timeline_repo
 from ..storage.repos import tournaments as tourney_repo
 from ..storage.repos import transcripts as tx_repo
@@ -289,6 +290,47 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         finally:
             await conn.close()
 
+    @api.get("/progress")
+    async def api_progress(session_id: str) -> JSONResponse:
+        """Durable task snapshot used to restore progress after a browser refresh."""
+        conn = await db_mod.connect(cfg)
+        try:
+            session = await sess_repo.fetch(conn, session_id)
+            if session is None:
+                raise HTTPException(status_code=404)
+            tasks = await task_repo.list_for_session(conn, session_id)
+        finally:
+            await conn.close()
+
+        terminal = session.status in {"done", "failed", "aborted"}
+        by_agent: dict[str, list[Any]] = {}
+        for task in tasks:
+            by_agent.setdefault(task.agent, []).append(task)
+        agents = []
+        for name in ("generation", "reflection", "ranking", "evolution", "proximity", "metareview", "data_analysis"):
+            agent_tasks = by_agent.get(name, [])
+            active = [t for t in agent_tasks if t.status in {"leased", "in_progress"}]
+            completed = [t for t in agent_tasks if t.status == "done"]
+            failed = [t for t in agent_tasks if t.status == "dead"]
+            latest = max(agent_tasks, key=lambda t: t.started_at or t.created_at, default=None)
+            outcome = "completed" if latest and latest.status == "done" else "failed" if latest and latest.status == "dead" else "idle"
+            activity = "running" if active and not terminal else outcome
+            current = max(active, key=lambda t: t.started_at or t.created_at, default=None) if not terminal else None
+            agents.append({
+                "name": name, "activity": activity, "running_count": len(active) if not terminal else 0,
+                "completed_count": len(completed), "failed_count": len(failed),
+                "action": (current or latest).action if (current or latest) else None,
+                "last_error": (latest.last_error if latest and activity == "failed" else None),
+            })
+        return JSONResponse({
+            "status": session.status, "goal": session.research_goal,
+            "started_at": session.created_at.timestamp() * 1000,
+            "ended_at": session.updated_at.timestamp() * 1000 if terminal else None,
+            "budget_usd": session.budget_usd, "agents": agents,
+            "completed_tasks": sum(a["completed_count"] for a in agents),
+            "failed_tasks": sum(a["failed_count"] for a in agents),
+        })
+
     async def _synthesis_doc(session_id: str) -> dict[str, Any] | None:
         conn = await db_mod.connect(cfg)
         try:
@@ -334,13 +376,16 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         return JSONResponse({"messages": [to_payload(m) for m in msgs]})
 
     @api.get("/research")
-    async def api_research(session_id: str) -> JSONResponse:
+    async def api_research(
+        session_id: str, include_drafts: bool = Query(False),
+    ) -> JSONResponse:
         conn = await db_mod.connect(cfg)
         try:
             if await sess_repo.fetch(conn, session_id) is None:
                 raise HTTPException(status_code=404, detail="session not found")
             shown = research_view.select_hypotheses(
-                await hyp_repo.list_for_session(conn, session_id)
+                await hyp_repo.list_for_session(conn, session_id),
+                include_drafts=include_drafts,
             )
             keys = research_view.linked_candidate_keys(shown)
             points = await analysis_repo.fetch_points(conn, session_id, keys) if keys else {}
@@ -353,7 +398,8 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         finally:
             await conn.close()
         return JSONResponse(research_view.to_research_session(
-            session_id, shown, report, points, journals=journals, attachments=atts,
+            session_id, shown, report, points, include_drafts=include_drafts,
+            journals=journals, attachments=atts,
         ))
 
     @api.get("/analysis")

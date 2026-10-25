@@ -26,9 +26,10 @@ export function useResearchProgress(source: ResearchEventSource, options?: Reduc
   }, [source])
 
   const snapshotStatus = options?.snapshotStatus
-  const progress = useMemo(() => reduceEvents(events, { snapshotStatus }), [events, snapshotStatus])
+  const snapshot = options?.snapshot
+  const progress = useMemo(() => reduceEvents(events, { snapshotStatus, snapshot }), [events, snapshotStatus, snapshot])
 
-  return { progress, connectionLost }
+  return { progress, connectionLost, events }
 }
 
 /** The current time, refreshed every second while `active`; for elapsed-time displays. */

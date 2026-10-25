@@ -3,10 +3,8 @@ export const ACCEPTED_FORMATS = [
   { extension: '.docx', label: 'DOCX' },
   { extension: '.txt', label: 'TXT' },
   { extension: '.csv', label: 'CSV' },
+  { extension: '.zip', label: 'ZIP' },
 ] as const
-
-export const MAX_ATTACHMENTS = 5
-export const MAX_FILE_BYTES = 25 * 1024 * 1024
 
 export const ACCEPT_ATTRIBUTE = ACCEPTED_FORMATS.map((format) => format.extension).join(',')
 
@@ -48,11 +46,6 @@ export function addAttachments(current: Attachment[], incoming: File[]) {
 
     if (!hasAcceptedExtension(file.name)) {
       problems.push(`${file.name} isn't a supported format. Use ${ACCEPTED_FORMATS_LABEL}.`)
-    } else if (file.size > MAX_FILE_BYTES) {
-      problems.push(`${file.name} is larger than ${formatBytes(MAX_FILE_BYTES)}.`)
-    } else if (attachments.length >= MAX_ATTACHMENTS) {
-      problems.push(`You can attach up to ${MAX_ATTACHMENTS} files.`)
-      break
     } else {
       attachments.push({ id, file })
     }

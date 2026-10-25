@@ -1,5 +1,4 @@
 import { useId, type ReactNode } from 'react'
-import { DemoNotice } from '@/components/DemoNotice'
 import { formatValue, summarise } from '@/features/research/dataStats'
 import type { Hypothesis } from '@/types/research'
 import { SampleBarChart } from './SampleBarChart'
@@ -27,9 +26,9 @@ export function DataTab({ hypothesis }: { hypothesis: Hypothesis }) {
 
   return (
     <div className="space-y-6 px-5 py-6 sm:px-8">
-      <DemoNotice>Demonstration data. These values are invented to show the layout and were not measured.</DemoNotice>
+      {dataPoints.length === 0 && <p className="rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">No sample level analysis is linked to this hypothesis. Session wide analysis, when available, is under Dataset analysis.</p>}
 
-      <Section title="Summary">
+      {(dataPoints.length > 0 || dataSummary.description.length > 0) && <Section title="Dataset analysis">
         <p className="text-sm leading-6 text-muted-foreground">{dataSummary.description}</p>
         <dl className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-4">
           {[
@@ -56,20 +55,21 @@ export function DataTab({ hypothesis }: { hypothesis: Hypothesis }) {
             </div>
           ))}
         </dl>
-      </Section>
+      </Section>}
 
-      <Section title={`${dataSummary.metric} by sample`}>
+      {dataPoints.length > 0 && <Section title={`${dataSummary.metric} by sample`}>
         <SampleBarChart
           points={dataPoints}
           groups={stats.groups}
           metric={dataSummary.metric}
           unit={dataSummary.unit}
         />
-      </Section>
+      </Section>}
 
+      {dataPoints.length > 0 &&
       <Section title="Sample values">
         <table className="w-full text-sm">
-          <caption className="sr-only">Demo {dataSummary.metric.toLowerCase()} for each sample</caption>
+          <caption className="sr-only">{dataSummary.metric.toLowerCase()} for each sample</caption>
           <thead>
             <tr className="border-b border-border">
               <th scope="col" className="h-9 w-20 pr-4 text-left text-xs font-normal text-muted-foreground">
@@ -95,7 +95,7 @@ export function DataTab({ hypothesis }: { hypothesis: Hypothesis }) {
             ))}
           </tbody>
         </table>
-      </Section>
+      </Section>}
     </div>
   )
 }

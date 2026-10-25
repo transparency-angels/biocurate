@@ -88,7 +88,7 @@ export function parseSseMessage(message: SseMessage): ResearchEvent | null {
 
   // An unnamed SSE event arrives as "message"; live data also names itself
   const name = message.event && message.event !== 'message' ? message.event : (str(data.name) ?? 'message')
-  const rawPayload = isRecord(data.payload) ? data.payload : {}
+  const rawPayload = isRecord(data.payload) ? data.payload : (message.event === 'timeline_message' ? data : {})
 
   const payload = isKnownName(name) ? normalisePayload(name, rawPayload) : null
   const key = `${ts}|${name}|${JSON.stringify(payload ?? rawPayload)}`
@@ -193,9 +193,11 @@ export const AGENT_LABELS: Record<AgentName, string> = {
   evolution: 'Evolution',
   proximity: 'Proximity',
   metareview: 'Meta-review',
+  data_analysis: 'Data analysis',
 }
 
 export const ACTION_LABELS: Record<TaskAction, string> = {
+  ProfileDataset: 'Profiling the uploaded dataset',
   CreateInitialHypotheses: 'Creating an initial hypothesis',
   GenerateFromFeedback: 'Generating a hypothesis from feedback',
   DirectGeneration: 'Generating a hypothesis',
@@ -268,6 +270,18 @@ export interface ReduceOptions {
    * the replay omits pause, resume and abort, so a live integration should pass this through.
    */
   snapshotStatus?: BackendSessionStatus
+  snapshot?: ProgressSnapshot
+}
+
+export interface ProgressSnapshot {
+  status: BackendSessionStatus
+  goal: string | null
+  started_at: number
+  ended_at: number | null
+  budget_usd: number | null
+  agents: Array<{ name: AgentName; activity: AgentActivity; running_count: number; completed_count: number; failed_count: number; action: TaskAction | null; last_error: string | null }>
+  completed_tasks: number
+  failed_tasks: number
 }
 
 /**
@@ -280,6 +294,7 @@ export interface ReduceOptions {
  * only session_done ends the session.
  */
 export function reduceEvents(events: ResearchEvent[], options: ReduceOptions = {}): ResearchProgress {
+  const snapshot = options.snapshot
   const tasks = new Map<string, TaskRecord>()
   const tallies = Object.fromEntries(
     AGENT_NAMES.map((name) => [name, { completed: 0, failed: 0, lastAction: null, lastOutcome: null, lastError: null }]),
@@ -300,7 +315,14 @@ export function reduceEvents(events: ResearchEvent[], options: ReduceOptions = {
     const base = { key: event.key, ts: event.ts, agent: null, error: null }
 
     if (event.unknown) {
-      entries.push({ ...base, type: 'Unrecognised event', description: `The backend sent "${event.name}".`, tone: 'neutral' })
+      const title = str(event.payload.title)
+      const body = str(event.payload.body_markdown)
+      if (event.name === 'timeline_message' && (title || body)) {
+        const agent = str(event.payload.agent)
+        entries.push({ ...base, type: title ?? 'Session update', agent: isAgentName(agent) ? agent : null, description: body ?? '', tone: 'neutral' })
+      } else {
+        entries.push({ ...base, type: 'Session update', description: title ?? `The backend sent "${event.name}".`, tone: 'neutral' })
+      }
       continue
     }
 
@@ -419,9 +441,11 @@ export function reduceEvents(events: ResearchEvent[], options: ReduceOptions = {
     }
   }
 
-  if (options.snapshotStatus === 'failed') phase = 'failed'
-  else if (options.snapshotStatus === 'aborted') phase = 'aborted'
-  else if (options.snapshotStatus === 'paused' && !isTerminal(phase)) phase = 'paused'
+  const snapshotStatus = snapshot?.status ?? options.snapshotStatus
+  if (snapshotStatus === 'failed') phase = 'failed'
+  else if (snapshotStatus === 'aborted') phase = 'aborted'
+  else if (snapshotStatus === 'done') phase = 'completed'
+  else if (snapshotStatus === 'paused' && !isTerminal(phase)) phase = 'paused'
 
   const ended = isTerminal(phase)
   const running = new Map<AgentName, { count: number; action: string }>()
@@ -431,7 +455,11 @@ export function reduceEvents(events: ResearchEvent[], options: ReduceOptions = {
     running.set(task.agent, { count: (current?.count ?? 0) + 1, action: task.action })
   }
 
-  const agents = AGENT_NAMES.map((name): AgentProgress => {
+  const agents = snapshot?.agents.map((agent): AgentProgress => ({
+    name: agent.name, activity: agent.activity, runningCount: agent.running_count,
+    completedCount: agent.completed_count, failedCount: agent.failed_count,
+    action: agent.action, lastError: agent.last_error,
+  })) ?? AGENT_NAMES.map((name): AgentProgress => {
     const tally = tallies[name]
     // Once the session has ended nothing is still running, whatever went unreported
     const inFlight = ended ? undefined : running.get(name)
@@ -449,15 +477,15 @@ export function reduceEvents(events: ResearchEvent[], options: ReduceOptions = {
 
   return {
     phase,
-    goal,
-    startedAt,
-    endedAt,
-    budgetUsd,
+    goal: snapshot?.goal ?? goal,
+    startedAt: snapshot?.started_at ?? startedAt,
+    endedAt: snapshot?.ended_at ?? endedAt,
+    budgetUsd: snapshot?.budget_usd ?? budgetUsd,
     initialHypotheses,
     stopReason,
     agents,
-    completedTasks: agents.reduce((sum, a) => sum + a.completedCount, 0),
-    failedTasks: agents.reduce((sum, a) => sum + a.failedCount, 0),
+    completedTasks: snapshot?.completed_tasks ?? agents.reduce((sum, a) => sum + a.completedCount, 0),
+    failedTasks: snapshot?.failed_tasks ?? agents.reduce((sum, a) => sum + a.failedCount, 0),
     unattributedResults,
     entries,
   }

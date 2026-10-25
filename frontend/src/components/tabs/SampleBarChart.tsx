@@ -26,7 +26,7 @@ export function SampleBarChart({ points, groups, metric, unit }: SampleBarChartP
   return (
     <figure
       role="img"
-      aria-label={`Column chart of demo ${metric.toLowerCase()} for ${points.length} samples in ${groups.length} groups. Exact values are in the table below.`}
+    aria-label={`Column chart of ${metric.toLowerCase()} for ${points.length} samples in ${groups.length} groups. Exact values are in the table below.`}
     >
       <ul aria-hidden="true" className="mb-4 flex flex-wrap gap-x-4 gap-y-1">
         {groups.map((group) => (
@@ -84,7 +84,7 @@ export function SampleBarChart({ points, groups, metric, unit }: SampleBarChartP
       </div>
 
       <figcaption className="mt-3 text-xs text-faint">
-        {metric} ({unit}), illustrative values only.
+        {metric} ({unit}) from the uploaded dataset.
       </figcaption>
     </figure>
   )

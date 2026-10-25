@@ -1,4 +1,3 @@
-import { DemoNotice } from '@/components/DemoNotice'
 import type { Hypothesis } from '@/types/research'
 import { SourceCard } from './SourceCard'
 
@@ -13,10 +12,6 @@ export function SourcesTab({ hypothesis }: { hypothesis: Hypothesis }) {
           {sources.length} {sources.length === 1 ? 'record' : 'records'}
         </p>
       </div>
-      <div className="mt-3">
-        <DemoNotice>Demonstration records, not real citations. Links appear only once a source is verified.</DemoNotice>
-      </div>
-
       {sources.length > 0 ? (
         <ul className="mt-5 space-y-3">
           {sources.map((source) => (

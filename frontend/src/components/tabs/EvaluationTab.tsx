@@ -1,5 +1,6 @@
-import { DemoNotice } from '@/components/DemoNotice'
 import type { Hypothesis } from '@/types/research'
+import { Lightbulb, Microscope } from 'lucide-react'
+import { ScientificText } from '@/components/overview/ScientificText'
 
 interface EvaluationTabProps {
   hypothesis: Hypothesis
@@ -9,29 +10,26 @@ interface EvaluationTabProps {
 export function EvaluationTab({ hypothesis, total }: EvaluationTabProps) {
   return (
     <article className="px-5 py-6 sm:px-8 sm:py-8">
-      <header>
-        <p className="text-[0.8125rem] text-muted-foreground tabular-nums">
-          Rank {hypothesis.rank} of {total}
-        </p>
-        <h2 className="mt-1 text-xl leading-7 font-semibold tracking-[-0.01em] text-balance text-foreground sm:text-[1.375rem]">
+      <header className="relative overflow-hidden rounded-2xl border border-brand/15 bg-gradient-to-br from-brand/[0.07] via-card to-card p-5 sm:p-7">
+        <div aria-hidden="true" className="absolute -right-8 -top-10 size-36 rounded-full border border-brand/10" />
+        <div className="relative flex items-center gap-2 text-xs font-medium text-brand">
+          <Lightbulb aria-hidden="true" className="size-4" />
+          <span>Hypothesis {hypothesis.rank} <span className="text-muted-foreground">of {total}</span></span>
+        </div>
+        <h2 className="relative mt-3 max-w-[38ch] text-xl leading-8 font-semibold tracking-[-0.02em] text-balance text-foreground sm:text-2xl">
           {hypothesis.title}
         </h2>
-        <div className="mt-3">
-          <DemoNotice>Placeholder text for layout only. It is not a research finding.</DemoNotice>
-        </div>
       </header>
 
-      <div className="mt-6 border-t border-border pt-6">
-        <div className="max-w-[68ch] space-y-7">
-          <section>
-            <h3 className="text-sm font-semibold text-foreground">Abstract</h3>
-            <p className="mt-2 font-serif text-[1.0625rem] leading-7 text-foreground/90">{hypothesis.abstract}</p>
+      <div className="mx-auto mt-8 max-w-[72ch] space-y-8">
+          <section aria-labelledby="hypothesis-claim" className="relative border-l-2 border-brand/40 pl-5 sm:pl-6">
+            <h3 id="hypothesis-claim" className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Core claim</h3>
+            <div className="mt-3"><ScientificText>{hypothesis.abstract}</ScientificText></div>
           </section>
-          <section>
-            <h3 className="text-sm font-semibold text-foreground">Research explanation</h3>
-            <p className="mt-2 font-serif text-[1.0625rem] leading-7 text-foreground/90">{hypothesis.explanation}</p>
+          <section aria-labelledby="hypothesis-rationale" className="rounded-2xl bg-muted/45 p-5 sm:p-6">
+            <h3 id="hypothesis-rationale" className="flex items-center gap-2 text-sm font-semibold text-foreground"><Microscope aria-hidden="true" className="size-4 text-brand" />Research rationale</h3>
+            <div className="mt-3"><ScientificText>{hypothesis.explanation}</ScientificText></div>
           </section>
-        </div>
       </div>
     </article>
   )

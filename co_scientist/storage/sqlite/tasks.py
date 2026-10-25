@@ -200,6 +200,17 @@ async def count_by_status(
     return {r["status"]: r["n"] for r in rows}
 
 
+async def list_for_session(
+    conn: aiosqlite.Connection, session_id: str
+) -> list[Task]:
+    """All tasks for reconstructing a session's progress after a client reconnects."""
+    async with conn.execute(
+        "SELECT * FROM tasks WHERE session_id=? ORDER BY created_at, id", (session_id,)
+    ) as cur:
+        rows = await cur.fetchall()
+    return [_row_to_task(row) for row in rows]
+
+
 def _row_to_task(row: aiosqlite.Row) -> Task:
     return Task(
         id=row["id"],

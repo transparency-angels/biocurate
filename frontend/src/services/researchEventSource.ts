@@ -43,6 +43,7 @@ export function createSseEventSource(sessionId: string, baseUrl = ''): ResearchE
       const forward = (event: MessageEvent<string>) => onMessage({ event: event.type, data: event.data })
 
       for (const name of KNOWN_EVENT_NAMES) source.addEventListener(name, forward)
+      source.addEventListener('timeline_message', forward)
       source.addEventListener('message', forward)
       // EventSource reconnects by itself; the backend then replays its last 25 events,
       // which the adapter de-duplicates

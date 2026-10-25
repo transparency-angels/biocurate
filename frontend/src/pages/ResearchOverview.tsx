@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useParams } from 'react-router'
 import { ConvergenceSection } from '@/components/overview/ConvergenceSection'
 import { ExecutiveSummary } from '@/components/overview/ExecutiveSummary'
@@ -8,11 +8,9 @@ import { ResearchDirectionView } from '@/components/overview/ResearchDirectionVi
 import { ResearchSources } from '@/components/overview/ResearchSources'
 import { sourceElementId } from '@/components/overview/sourceAnchor'
 import { ResearchViewSwitch } from '@/components/research/ResearchViewSwitch'
-import { DEMO_SESSION_ID } from '@/data/mockHypotheses'
-import { DEMO_RESEARCH_OVERVIEW } from '@/data/mockResearchOverview'
+import { getSynthesis, normaliseSynthesis } from '@/services/api'
 import { useDocumentTitle } from '@/lib/useDocumentTitle'
 import type { Citation } from '@/types/researchOverview'
-import { NotFoundPage } from './NotFoundPage'
 
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'long' })
 
@@ -25,8 +23,18 @@ function formatGeneratedAt(iso: string | null) {
 export function ResearchOverview() {
   const { sessionId } = useParams()
   const [highlight, setHighlight] = useState<Citation | null>(null)
-  const isDemo = sessionId === DEMO_SESSION_ID
-  useDocumentTitle(isDemo ? 'Research overview' : 'Research session not found')
+  const [overview, setOverview] = useState<ReturnType<typeof normaliseSynthesis>>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    if (!sessionId) return
+    let active = true
+    getSynthesis(sessionId).then((payload) => { if (active) setOverview(normaliseSynthesis(payload)) })
+      .catch((e: Error) => { if (active) setError(e.message) })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [sessionId])
+  useDocumentTitle('Research overview')
 
   // Jumps to the cited source and marks it, so a citation can be checked where it lands
   const selectCitation = useCallback((citation: Citation) => {
@@ -39,16 +47,6 @@ export function ResearchOverview() {
     element.scrollIntoView({ behavior: 'auto', block: 'start' })
   }, [])
 
-  if (!isDemo) {
-    return (
-      <NotFoundPage
-        title="Research session not found"
-        message="Real research sessions are not available in this prototype yet. Only the demo session exists."
-      />
-    )
-  }
-
-  const overview = DEMO_RESEARCH_OVERVIEW
   const generatedAt = formatGeneratedAt(overview?.generatedAt ?? null)
 
   return (
@@ -57,24 +55,21 @@ export function ResearchOverview() {
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <h1 className="text-2xl font-semibold tracking-[-0.01em] text-foreground">Research overview</h1>
-            <span className="inline-flex h-6 flex-none items-center rounded-full bg-brand/15 px-2.5 text-xs font-medium text-brand">
-              Example research output
-            </span>
           </div>
           <p className="mt-1 max-w-[62ch] text-sm leading-6 text-muted-foreground">
-            The final synthesis recorded for one completed Co-Scientist session, shown here to develop the
-            interface. It does not answer a question asked in this prototype, and opening this page runs no
-            research.
+            The final synthesis recorded for this research session.
           </p>
         </div>
-        <ResearchViewSwitch sessionId={DEMO_SESSION_ID} />
+        <ResearchViewSwitch sessionId={sessionId ?? ''} />
       </div>
 
-      {overview === null ? (
+      {loading && <p className="mt-8 text-sm text-muted-foreground">Loading the research synthesis…</p>}
+      {error && <p role="alert" className="mt-8 text-sm text-muted-foreground">{error}</p>}
+      {!loading && !error && overview === null ? (
         <p className="mt-8 border-t border-border pt-8 text-sm leading-6 text-muted-foreground">
           No synthesis is available for this session.
         </p>
-      ) : (
+      ) : overview ? (
         <>
           {(overview.sessionId !== null || generatedAt !== null) && (
             <dl className="mt-5 flex flex-wrap gap-x-8 gap-y-2 text-[0.8125rem] leading-5">
@@ -152,7 +147,7 @@ export function ResearchOverview() {
             </OverviewSection>
           </div>
         </>
-      )}
+      ) : null}
     </div>
   )
 }
