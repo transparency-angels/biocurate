@@ -565,17 +565,23 @@ _LIVE_QUEUE_MAX = 256
 
 
 def _timeline_start(request: Request) -> int:
-    """Where the timeline resumes: `?after_seq=`, else `Last-Event-ID`, else 0.
+    """Where the timeline resumes: the later of `?after_seq=` and `Last-Event-ID`.
 
-    A non-integer or negative value counts as 0 (resend everything).
+    An EventSource keeps its original URL on reconnect, so the query alone would
+    resend from the first page load. Each value is parsed on its own; a missing,
+    non-integer or negative value counts as 0.
     """
-    raw = request.query_params.get("after_seq")
-    if raw is None:
-        raw = request.headers.get("last-event-id")
-    try:
-        return max(int(raw), 0) if raw is not None else 0
-    except ValueError:
-        return 0
+
+    def _parse(raw: str | None) -> int:
+        try:
+            return max(int(raw), 0) if raw is not None else 0
+        except ValueError:
+            return 0
+
+    return max(
+        _parse(request.query_params.get("after_seq")),
+        _parse(request.headers.get("last-event-id")),
+    )
 
 
 async def _live_events(cfg: Config, session_id: str, start: int) -> AsyncIterator[dict[str, Any]]:
@@ -607,6 +613,8 @@ async def _live_events(cfg: Config, session_id: str, start: int) -> AsyncIterato
             async with contextlib.aclosing(follow) as gen:
                 async for m in gen:
                     await queue.put(("timeline", to_payload(m)))
+            # e.g. a change-stream invalidate: the cursor ends without an error.
+            log.info("timeline_watch_ended", session_id=session_id)
         except Exception as e:  # never str() it: PyMongo messages can carry hosts
             log.warning("timeline_watch_failed", session_id=session_id,
                         err_type=type(e).__name__)

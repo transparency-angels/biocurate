@@ -13,6 +13,8 @@ import json
 from typing import Any
 
 import pytest
+from pymongo.errors import PyMongoError
+from structlog.testing import capture_logs
 
 from co_scientist import timeline
 from co_scientist.config import Config
@@ -151,14 +153,70 @@ async def test_events_stream_resumes_timeline_after_seq(tmp_cfg) -> None:
     assert _seqs(rest) == []
 
 
-async def test_after_seq_query_wins_over_header_and_bad_values_mean_zero(tmp_cfg) -> None:
+async def test_start_is_max_of_query_and_header_and_bad_values_mean_zero(tmp_cfg) -> None:
     sid = await _make_session(tmp_cfg)
     await _post(tmp_cfg, sid, "m1", "m2", "m3")
     path = f"/api/sessions/{sid}/events"
-    async with _SSE(tmp_cfg, f"{path}?after_seq=1", {"Last-Event-ID": "2"}) as sse:
-        assert [e["id"] for e in await sse.timeline_events(2)] == ["2", "3"]
-    async with _SSE(tmp_cfg, f"{path}?after_seq=abc", {"Last-Event-ID": "x"}) as sse:
-        assert [e["id"] for e in await sse.timeline_events(3)] == ["1", "2", "3"]
+    cases = [
+        (f"{path}?after_seq=1", {"Last-Event-ID": "2"}, ["3"]),
+        (f"{path}?after_seq=2", {"Last-Event-ID": "1"}, ["3"]),
+        (f"{path}?after_seq=1", {"Last-Event-ID": "x"}, ["2", "3"]),
+        (f"{path}?after_seq=abc", {"Last-Event-ID": "2"}, ["3"]),
+        (f"{path}?after_seq=-5", {"Last-Event-ID": "-1"}, ["1", "2", "3"]),
+        (f"{path}?after_seq=abc", {"Last-Event-ID": "x"}, ["1", "2", "3"]),
+    ]
+    for url, headers, want in cases:
+        async with _SSE(tmp_cfg, url, headers) as sse:
+            got = [e["id"] for e in await sse.timeline_events(len(want))]
+            got += [str(s) for s in _seqs(await sse.drain(0.1))]
+        assert got == want, (url, headers)
+
+
+async def test_watcher_failure_logs_type_only_and_bus_keeps_flowing(
+    tmp_cfg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    secret = "mongodb+srv://user:hunter2@cluster0.example.net"
+
+    async def boom(conn, session_id, after_seq):
+        raise PyMongoError(f"connection refused {secret}")
+        yield  # pragma: no cover - makes this an async generator
+
+    monkeypatch.setattr(watch_mod, "timeline_after", boom)
+    sid = await _make_session(tmp_cfg)
+    with capture_logs() as logs:
+        async with _SSE(tmp_cfg, f"/api/sessions/{sid}/events") as sse:
+            for _ in range(100):
+                if GLOBAL_BUS.subscriber_count(sid) and any(
+                    e.get("event") == "timeline_watch_failed" for e in logs
+                ):
+                    break
+                await asyncio.sleep(0.01)
+            await GLOBAL_BUS.publish(sid, "match_complete", {"x": 1})
+            ev = await sse.next_event()
+    assert ev["event"] == "match_complete"
+    failed = [e for e in logs if e.get("event") == "timeline_watch_failed"]
+    assert failed and failed[0]["err_type"] == "PyMongoError"
+    assert "hunter2" not in repr(logs)
+
+
+async def test_watcher_ending_normally_is_logged(
+    tmp_cfg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def ends(conn, session_id, after_seq):
+        return
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(watch_mod, "timeline_after", ends)
+    sid = await _make_session(tmp_cfg)
+    with capture_logs() as logs:
+        async with _SSE(tmp_cfg, f"/api/sessions/{sid}/events"):
+            for _ in range(100):
+                if any(e.get("event") == "timeline_watch_ended" for e in logs):
+                    break
+                await asyncio.sleep(0.01)
+    ended = [e for e in logs if e.get("event") == "timeline_watch_ended"]
+    assert ended and ended[0]["session_id"] == sid
+    assert not any(e.get("event") == "timeline_watch_failed" for e in logs)
 
 
 async def test_events_stream_still_carries_other_bus_events(tmp_cfg) -> None:
