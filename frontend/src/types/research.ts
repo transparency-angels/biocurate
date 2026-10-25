@@ -34,6 +34,8 @@ export interface Hypothesis {
   rank: number
   state?: 'draft' | 'reviewed' | 'in_tournament' | 'pinned' | 'rejected' | 'quarantined' | 'retired'
   createdAt?: string
+  elo?: number | null
+  matchesPlayed?: number
   title: string
   summary: string
   abstract: string
