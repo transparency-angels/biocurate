@@ -18,6 +18,7 @@ from rich.table import Table
 
 from .config import load_config
 from .logging import get_logger, setup_logging
+from .overview import load_overview_markdown
 from .storage import db as db_mod
 from .storage.repos import hypotheses as hyp_repo
 from .storage.repos import sessions as sess_repo
@@ -489,32 +490,25 @@ def report(
     """Print the final research overview for a session (when available)."""
     cfg, _ = ctx.obj
 
-    async def _path() -> Path | None:
+    async def _load() -> tuple[str, str] | None:
         conn = await db_mod.connect(cfg)
         try:
             session = await sess_repo.fetch(conn, session_id)
             if session is None or not session.final_overview:
                 return None
-            return cfg.data_dir / session.final_overview
+            md = await load_overview_markdown(conn, cfg, session)
+            return None if md is None else (session.final_overview, md)
         finally:
             await conn.close()
 
-    p = asyncio.run(_path())
-    if p is None:
+    loaded = asyncio.run(_load())
+    if loaded is None:
         console.print(f"[red]No final overview yet for {session_id}[/red]")
         raise typer.Exit(1)
-    content = p.read_text(encoding="utf-8")
+    ref, text = loaded
     if format == "json":
-        console.print_json(data={"session_id": session_id, "path": str(p), "content": content})
+        console.print_json(data={"session_id": session_id, "path": ref, "content": text})
     else:
-        if p.suffix == ".json":
-            try:
-                data = json.loads(content)
-                text = data.get("overview", {}).get("markdown") or data.get("markdown") or content
-            except Exception:
-                text = content
-        else:
-            text = content
         console.print(text)
 
 

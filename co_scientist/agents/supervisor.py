@@ -48,12 +48,13 @@ from ..orchestrator.termination import (
 from ..safety.quoting import quote_untrusted
 from ..storage import Conn
 from ..storage import db as db_mod
-from ..storage.artifacts import write_text
+from ..storage.repos import analysis as analysis_repo
 from ..storage.repos import events as events_repo
 from ..storage.repos import feedback as fb_repo
 from ..storage.repos import hypotheses as hyp_repo
 from ..storage.repos import reviews as rev_repo
 from ..storage.repos import sessions as sess_repo
+from ..storage.repos import syntheses as syntheses_repo
 from ..storage.repos import tasks as task_repo
 from ..tools.registry import ToolRegistry
 from .base import AgentDeps
@@ -609,11 +610,11 @@ class Supervisor:
             f"**Hypotheses produced.** {len(hyps)}",
             "",
         ]
-        if (self.cfg.session_artifact_dir(session.id) / "data_analysis" / "summary.md").is_file():
+        if await analysis_repo.fetch_report(conn, session.id):
             parts.extend([
                 "## Dataset analysis", "",
                 "Survival statistics and plots are available in the separate "
-                "[dataset analysis summary](../data_analysis/summary.md).", "",
+                f"[dataset analysis summary](/api/sessions/{session.id}/analysis).", "",
             ])
         if not hyps:
             parts.extend([
@@ -638,7 +639,17 @@ class Supervisor:
                     )
             parts.append("")
         body = "\n".join(parts)
-        return await write_text(self.cfg, session.id, "final", "overview", ".md", body)
+        now = datetime.now(UTC).isoformat()
+        await syntheses_repo.save(conn, session.id, {
+            "session_id": session.id,
+            "generated_at": now,
+            "overview": {"markdown": body},
+            "sources": {
+                "session_id": session.id, "generated_at": now, "total_sources": 0, "sources": [],
+            },
+            "sources_list": [],
+        })
+        return f"db:syntheses/{session.id}"
 
     # ----------------------------- helpers ----------------------------- #
 

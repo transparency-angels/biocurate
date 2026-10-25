@@ -1255,3 +1255,39 @@ async def test_points_doc_size_for_24k_samples(any_conn) -> None:
         size = len(bson.encode(doc))
         print(f"BSON size of 24k-point doc: {size}")
         assert size < 16 * 1024 * 1024
+
+
+@pytest.mark.asyncio
+async def test_synthesis_roundtrip(any_conn) -> None:
+    from co_scientist.storage.repos import syntheses as repo
+
+    assert await repo.fetch(any_conn, "ses_syn") is None
+    doc = {
+        "session_id": "ses_syn", "generated_at": "2026-01-01T00:00:00+00:00",
+        "overview": {"markdown": "# Hi"}, "sources": {"sources": [{"id": "S1"}]},
+        "sources_list": [{"id": "S1"}],
+    }
+    await repo.save(any_conn, "ses_syn", doc)
+    assert await repo.fetch(any_conn, "ses_syn") == doc
+    await repo.save(any_conn, "ses_syn", {**doc, "overview": {"markdown": "# New"}})
+    assert (await repo.fetch(any_conn, "ses_syn"))["overview"]["markdown"] == "# New"
+
+
+@pytest.mark.asyncio
+async def test_load_overview_markdown_db_and_legacy_file(any_conn, tmp_path) -> None:
+    from types import SimpleNamespace
+
+    from co_scientist.overview import load_overview_markdown
+    from co_scientist.storage.repos import syntheses as repo
+
+    cfg = SimpleNamespace(data_dir=tmp_path)
+    sess = lambda ref: SimpleNamespace(final_overview=ref)  # noqa: E731
+    assert await load_overview_markdown(any_conn, cfg, sess(None)) is None
+    assert await load_overview_markdown(any_conn, cfg, sess("db:syntheses/ses_lo")) is None
+    await repo.save(any_conn, "ses_lo", {"overview": {"markdown": "# From db"}})
+    assert await load_overview_markdown(any_conn, cfg, sess("db:syntheses/ses_lo")) == "# From db"
+    (tmp_path / "o.md").write_text("# Legacy md")
+    (tmp_path / "s.json").write_text(json.dumps({"overview": {"markdown": "# Legacy json"}}))
+    assert await load_overview_markdown(any_conn, cfg, sess("o.md")) == "# Legacy md"
+    assert await load_overview_markdown(any_conn, cfg, sess("s.json")) == "# Legacy json"
+    assert await load_overview_markdown(any_conn, cfg, sess("gone.md")) is None

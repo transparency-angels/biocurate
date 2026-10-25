@@ -20,15 +20,17 @@ from co_scientist.llm.types import SynthMessage, TextBlock, ToolUseBlock
 from co_scientist.models import Hypothesis, ResearchPlan, Session
 from co_scientist.orchestrator.termination import StopReason
 from co_scientist.storage import db as db_mod
-from co_scientist.storage.artifacts import write_text
 from co_scientist.storage.repos import analysis as analysis_repo
 from co_scientist.storage.repos import blobs
 from co_scientist.storage.repos import hypotheses as hyp_repo
 from co_scientist.storage.repos import sessions as sess_repo
+from co_scientist.storage.repos import syntheses as syntheses_repo
 from co_scientist.storage.repos import tasks as task_repo
 
 
-async def test_data_driven_session_writes_both_reports(tmp_cfg, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_metareview_saves_synthesis_to_db_not_file(
+    tmp_cfg, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Exercise real profiling, generation persistence, and finalization.
 
     Only model responses, embeddings, and the worker-loop timing are replaced;
@@ -112,14 +114,18 @@ async def test_data_driven_session_writes_both_reports(tmp_cfg, monkeypatch: pyt
     session_id = await supervisor.run_session("Find biomarkers in the dataset", attachments=files)
     root = tmp_cfg.session_artifact_dir(session_id)
     assert not (root / "data_analysis").exists()
-    # The meta-review writes its overview into final/synthesis.json (cite-lines);
-    # the simple fallback overview below is still final/overview.md.
-    synthesis = json.loads((root / "final" / "synthesis.json").read_text())
+    # The meta-review stores its synthesis in the database, not in final/synthesis.json.
+    assert not (root / "final" / "synthesis.json").exists()
+    conn = await db_mod.connect(tmp_cfg)
+    try:
+        synthesis = await syntheses_repo.fetch(conn, session_id)
+    finally:
+        await conn.close()
     overview = synthesis["overview"]["markdown"]
     # "# Sources" is split out of the overview into the structured sources.
     assert "GENE_X is a candidate for further mechanistic study [S1]." in overview
     assert "# Sources" not in overview
-    assert "[dataset analysis summary](../data_analysis/summary.md)" in overview
+    assert f"[dataset analysis summary](/api/sessions/{session_id}/analysis)" in overview
     assert paper in json.dumps(synthesis["sources"])
     llm.call.assert_awaited_once()
     spec, context = llm.call.call_args.args
@@ -138,7 +144,7 @@ async def test_data_driven_session_writes_both_reports(tmp_cfg, monkeypatch: pyt
         assert (await blobs.get(conn, "plots", plot["blob_id"])).startswith(b"\x89PNG")
         session = await sess_repo.fetch(conn, session_id)
         assert session.status == "done"
-        assert tmp_cfg.data_dir / session.final_overview == root / "final" / "synthesis.json"
+        assert session.final_overview == f"db:syntheses/{session_id}"
         assert (await hyp_repo.list_for_session(conn, session_id))[0].strategy == "data_driven"
     finally:
         await conn.close()
@@ -155,8 +161,7 @@ async def test_finalization_keeps_dataset_report_when_meta_review_cannot_write(
         config_snapshot={}, budget_tokens=1000, budget_usd=1,
     )
     await sess_repo.insert(conn, session)
-    summary = "# Dataset analysis\n\nKaplan-Meier results and plots.\n"
-    await write_text(tmp_cfg, session.id, "data_analysis", "summary", ".md", summary)
+    await analysis_repo.save_report(conn, session.id, {"summary_markdown": "# Dataset analysis"})
     if failure == "llm_error":
         await hyp_repo.insert(conn, Hypothesis(
             id="hyp_data_outputs", session_id=session.id, created_at=now, created_by="generation",
@@ -172,10 +177,12 @@ async def test_finalization_keeps_dataset_report_when_meta_review_cannot_write(
     saved = await sess_repo.fetch(conn, session.id)
     root = tmp_cfg.session_artifact_dir(session.id)
     assert saved.status == "done"
-    assert tmp_cfg.data_dir / saved.final_overview == root / "final" / "overview.md"
-    assert (root / "data_analysis" / "summary.md").read_text() == summary
-    overview = (root / "final" / "overview.md").read_text()
-    assert "[dataset analysis summary](../data_analysis/summary.md)" in overview
+    assert saved.final_overview == f"db:syntheses/{session.id}"
+    assert not (root / "final" / "overview.md").exists()
+    doc = await syntheses_repo.fetch(conn, session.id)
+    assert doc["sources"]["sources"] == [] and doc["sources_list"] == []
+    overview = doc["overview"]["markdown"]
+    assert f"[dataset analysis summary](/api/sessions/{session.id}/analysis)" in overview
     if failure == "no_hypotheses":
         assert "No hypotheses were generated" in overview
         llm.call.assert_not_awaited()

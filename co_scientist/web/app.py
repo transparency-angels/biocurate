@@ -32,6 +32,7 @@ from ..config import Config, load_config
 from ..logging import get_logger
 from ..models import SystemFeedback
 from ..orchestrator.events import GLOBAL_BUS
+from ..overview import DB_PREFIX, load_overview_markdown
 from ..storage import db as db_mod
 from ..storage.repos import events as events_repo
 from ..storage.repos import feedback as fb_repo
@@ -187,28 +188,18 @@ def create_app(cfg: Config | None = None) -> FastAPI:
                 raise HTTPException(
                     status_code=404, detail="no final overview yet for this session"
                 )
-            # `final_overview` is written by the supervisor under
-            # `data_dir/artifacts/...` but is stored as a string in the DB.
-            # Resolve and confirm the path is still inside `data_dir` so a
-            # tampered row can't read arbitrary files.
-            base = cfg.data_dir.resolve()
-            try:
-                path = (cfg.data_dir / session.final_overview).resolve()
-                path.relative_to(base)
-            except (ValueError, OSError) as e:
-                log.error("overview_path_escape", session=session_id, err=str(e))
-                raise HTTPException(status_code=404, detail="overview unavailable") from e
-            if not path.is_file():
-                raise HTTPException(status_code=404, detail="overview missing on disk")
-            content = path.read_text(encoding="utf-8")
-            if path.suffix == ".json":
+            if not session.final_overview.startswith(DB_PREFIX):
+                # Legacy file: resolve and confirm the path is still inside
+                # `data_dir` so a tampered row can't read arbitrary files.
+                base = cfg.data_dir.resolve()
                 try:
-                    data = json.loads(content)
-                    overview_md = data.get("overview", {}).get("markdown") or data.get("markdown") or content
-                except Exception:
-                    overview_md = content
-            else:
-                overview_md = content
+                    (cfg.data_dir / session.final_overview).resolve().relative_to(base)
+                except (ValueError, OSError) as e:
+                    log.error("overview_path_escape", session=session_id, err=str(e))
+                    raise HTTPException(status_code=404, detail="overview unavailable") from e
+            overview_md = await load_overview_markdown(conn, cfg, session)
+            if overview_md is None:
+                raise HTTPException(status_code=404, detail="overview missing on disk")
             return TEMPLATES.TemplateResponse(
                 request,
                 "overview.html",

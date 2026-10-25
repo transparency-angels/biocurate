@@ -278,11 +278,11 @@ def test_final_prompt_uses_dataset_results_for_a_separate_literature_overview() 
     prompt = render(
         "metareview.final", goal="g", preferences="", system_feedback="",
         top_hypotheses_block="data-driven hypothesis", sources="[S1] https://paper.example",
-        dataset_summary="Kaplan-Meier analysis; log-rank p = 0.001",
+        dataset_summary="Kaplan-Meier analysis; log-rank p = 0.001", session_id="ses_x",
     )
     assert "Kaplan-Meier analysis; log-rank p = 0.001" in prompt
     assert "# Executive summary" in prompt
     assert "# Main research directions" in prompt
     assert "# Sources" in prompt
-    assert "../data_analysis/summary.md" in prompt
+    assert "(/api/sessions/ses_x/analysis)" in prompt
     assert "never invent" in prompt

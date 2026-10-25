@@ -21,7 +21,7 @@ Empirical dataset analysis, produced separately from the literature review:
 Write the literature and mechanistic research overview as a separate report.
 Use the dataset results to ground observed associations, and distinguish these
 observations from literature-supported mechanisms and proposed explanations.
-Link to `[dataset analysis summary](../data_analysis/summary.md)` for the full
+Link to `[dataset analysis summary](/api/sessions/{{ session_id }}/analysis)` for the full
 statistical methods and survival plots. Keep the research-overview structure
 below; the dataset report is a separate output.
 {% endif %}
