@@ -8,6 +8,7 @@ import { ResearchOverview } from '@/pages/ResearchOverview'
 import { ResearchProgress } from '@/pages/ResearchProgress'
 import { ResearchResults } from '@/pages/ResearchResults'
 import { ResearchData } from '@/pages/ResearchData'
+import { ResearchSources } from '@/pages/ResearchSources'
 import { ResearchWorkspace } from '@/pages/ResearchWorkspace'
 import { createResearchSession } from '@/services/api'
 import { rememberCurrentSession } from '@/features/research/currentSession'
@@ -38,6 +39,7 @@ function App() {
           <Route path="research/:sessionId/progress" element={<ResearchProgress />} />
           <Route path="research/:sessionId/results" element={<ResearchResults />} />
           <Route path="research/:sessionId/data" element={<ResearchData />} />
+          <Route path="research/:sessionId/sources" element={<ResearchSources />} />
           <Route path="research/:sessionId/overview" element={<ResearchOverview />} />
           <Route path="*" element={<NotFoundPage />} />
         </Route>

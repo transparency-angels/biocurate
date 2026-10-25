@@ -14,6 +14,13 @@ export interface SourceRecord {
   description: string
   /** Only set for a verified link. Without one the card shows "Source link unavailable". */
   url: string | null
+  doi?: string | null
+  pmcid?: string | null
+  anchor?: string | null
+  lineRange?: string | null
+  verified?: boolean
+  verification_status?: 'verified' | 'unverified' | string
+  hypothesisId?: string
 }
 
 export interface DataPoint {

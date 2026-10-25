@@ -64,7 +64,7 @@ export function HypothesisTabs({ id, sessionId, hypothesis, total, activeTab, on
           <DataTab hypothesis={hypothesis} sessionId={sessionId} />
         </Tabs.Content>
         <Tabs.Content key={`sources-${hypothesis.id}`} value="sources" className={cn(contentClass, sourcesScrollPanel)}>
-          <SourcesTab hypothesis={hypothesis} />
+          <SourcesTab hypothesis={hypothesis} sessionId={sessionId} />
         </Tabs.Content>
       </Tabs.Root>
     </section>

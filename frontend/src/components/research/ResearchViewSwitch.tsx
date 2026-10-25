@@ -15,6 +15,7 @@ export function ResearchViewSwitch({ sessionId }: ResearchViewSwitchProps) {
     { label: 'Progress', to: `/research/${sessionId}/progress` },
     { label: 'Hypotheses', to: `/research/${sessionId}/results` },
     { label: 'Dataset analysis', to: `/research/${sessionId}/data` },
+    { label: 'Sources', to: `/research/${sessionId}/sources` },
     { label: 'Research overview', to: `/research/${sessionId}/overview` },
   ]
 
