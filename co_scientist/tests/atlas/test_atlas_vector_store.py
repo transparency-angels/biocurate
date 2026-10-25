@@ -8,6 +8,8 @@ import pytest
 from co_scientist.storage.atlas.indexes import wait_for_search_index
 from co_scientist.vectors.atlas_store import AtlasVectorStore
 
+pytestmark = pytest.mark.atlas_search
+
 
 def _unit(dim: int, *xs: float) -> np.ndarray:
     v = np.zeros(dim, dtype="float32")

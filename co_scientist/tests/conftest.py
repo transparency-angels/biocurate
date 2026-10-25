@@ -67,7 +67,7 @@ async def any_conn(request: pytest.FixtureRequest, tmp_cfg: Config):
     cfg = atlas_support.make_atlas_cfg()
     c = await connect_atlas(cfg)
     try:
-        await ensure_indexes(c, cfg)
+        await ensure_indexes(c, cfg, search=False)
         yield c
     finally:
         await atlas_support.drop_prefixed(c.db, c.prefix)

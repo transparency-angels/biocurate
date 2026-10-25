@@ -57,7 +57,13 @@ async def api_cfg(request: pytest.FixtureRequest, tmp_cfg: Config, tmp_path: Pat
         pytest.skip("set CO_SCI_ATLAS_TESTS=1 to run live Atlas tests")
     cfg = atlas_support.make_atlas_cfg()
     cfg.storage.data_dir = str(tmp_path)
-    await db_mod.init_db(cfg)
+    from co_scientist.storage.atlas.indexes import ensure_indexes
+
+    conn = await db_mod.connect(cfg)
+    try:  # B-tree only: search index builds cost minutes and these tests don't search
+        await ensure_indexes(conn, cfg, search=False)
+    finally:
+        await conn.close()
     try:
         yield cfg
     finally:

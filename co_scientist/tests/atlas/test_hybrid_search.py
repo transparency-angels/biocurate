@@ -4,6 +4,7 @@ import asyncio
 import time
 from functools import partial
 
+import pytest
 from pymongo.errors import OperationFailure
 
 from co_scientist.library.jats import PaperMeta, Passage
@@ -12,6 +13,7 @@ from co_scientist.storage.atlas import library as lib
 from co_scientist.storage.atlas.indexes import wait_for_search_index
 
 
+@pytest.mark.atlas_search
 async def test_hybrid_search_finds_figure_by_caption(atlas_conn, atlas_cfg):
     meta = PaperMeta("PMC900", "Zorblatt kinase paper", None, 2024, "J")
     passages = [
@@ -102,6 +104,7 @@ async def _store_upload(conn, cfg, sid, filename, text):
     return meta
 
 
+@pytest.mark.atlas_search
 async def test_upload_passages_visible_only_to_their_session(
     atlas_conn, atlas_cfg, monkeypatch
 ):

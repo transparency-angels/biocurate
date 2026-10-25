@@ -97,6 +97,7 @@ asyncio_mode = "auto"
 testpaths = ["co_scientist/tests"]
 markers = [
     "atlas: needs a live MongoDB Atlas cluster; runs only when CO_SCI_ATLAS_TESTS=1",
+    "atlas_search: waits for Atlas Search index builds; also needs CO_SCI_ATLAS_SEARCH_TESTS=1",
 ]
 
 [tool.mypy]

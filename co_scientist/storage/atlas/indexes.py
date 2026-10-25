@@ -181,13 +181,19 @@ async def _existing_search_names(coll: Any) -> set[str]:
     return {d["name"] for d in await cur.to_list()}
 
 
-async def ensure_indexes(conn: AtlasConn, cfg: Config) -> None:
-    """Idempotently create B-tree indexes and any missing search indexes."""
+async def ensure_indexes(conn: AtlasConn, cfg: Config, *, search: bool = True) -> None:
+    """Idempotently create B-tree indexes and, unless `search=False`, missing search indexes.
+
+    Tests pass `search=False`: building search indexes on throwaway prefixed
+    collections costs minutes per test and only search tests need them.
+    """
     for name, models in BTREE_INDEXES.items():
         await conn.coll(name).create_indexes(models)
     # Pre-create so the first Elo transaction does not implicitly create it.
     await conn.ensure_collection("elo_journal")
     await conn.ensure_collection("timeline_counters")
+    if not search:
+        return
 
     by_coll: dict[str, list[SearchIndexSpec]] = {}
     for spec in SEARCH_INDEX_SPECS:

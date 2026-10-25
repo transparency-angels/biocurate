@@ -325,7 +325,8 @@ How `AtlasVectorStore` works:
 | Command | What runs |
 |---|---|
 | `uv run pytest -q` | ~550 tests, offline, SQLite only; Atlas tests skipped. This is what CI runs. |
-| `CO_SCI_ATLAS_TESTS=1 uv run pytest -q` | Everything, plus every `any_conn` repo test on Atlas, plus `co_scientist/tests/atlas/` (indexes, library store, hybrid search, vector store). About 15 min, mostly search-index builds. 592 passed on 2026-10-24. |
+| `CO_SCI_ATLAS_TESTS=1 uv run pytest -q` | Everything, plus every `any_conn` repo test on Atlas, plus `co_scientist/tests/atlas/`. Test fixtures build B-tree indexes only, so no search-index waits. About 5 min; 820 passed on 2026-10-25. |
+| `CO_SCI_ATLAS_TESTS=1 CO_SCI_ATLAS_SEARCH_TESTS=1 uv run pytest -q` | Also runs the `atlas_search` tests (hybrid search, vector store), which wait for Atlas Search index builds: several minutes each. Run when search code changes. |
 
 - **Isolation:** Atlas tests use a fresh `t<ulid>_` collection prefix inside `biocurate` and drop *only* those collections on teardown. The guard is in `co_scientist/tests/atlas_support.py` (regex `^t[0-9a-z]{10,}_$`); real collections are never touched.
 - **Secrets:** unit tests never read your `.env`; an autouse fixture strips it. Atlas tests opt back in explicitly.
