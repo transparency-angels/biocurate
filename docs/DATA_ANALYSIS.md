@@ -1,11 +1,18 @@
 # Biomarker survival analysis and independent validation
 
-The Supervisor detects tabular inputs and enqueues `ProfileDataset`.
-`DataAnalysisAgent` calls `profile_dataset` in `co_scientist/analysis.py`, which
-reads flat clinical and alteration tables and runs lifelines survival analysis.
-The agent writes the report, statistics, and PNG plots under
-`data/artifacts/<session_id>/data_analysis/`. The standalone runner uses the same
-calculation without a database, session, LLM, or API key.
+In a research session the data comes from **attachments** (files uploaded with
+the question, `co-scientist run --attach`, or `POST /api/sessions`), not from a
+`data/` folder. The planning step sees a short description of each attachment and
+selects the tabular ones; the Supervisor then enqueues `ProfileDataset`.
+`DataAnalysisAgent` copies the selected attachments into a temporary directory and
+calls `profile_dataset` in `co_scientist/analysis.py`, which reads flat clinical
+and alteration tables and runs lifelines survival analysis. The agent stores the
+report, statistics, per-candidate survival points and PNG plots in the database
+(`analysis_reports`, `analysis_points` and the GridFS `plots` bucket on Atlas) and
+writes no files. Read them from `GET /api/sessions/{id}/analysis` and
+`GET /api/sessions/{id}/plots/{name}` (see [frontend-api.md](frontend-api.md)).
+The standalone runner below uses the same calculation without a database,
+session, LLM, or API key, and does write files.
 
 ## Run separately
 
@@ -76,6 +83,10 @@ The total significant-test count is reported separately from that display cap.
 
 ## Survival plots and outputs
 
+This section describes the standalone runner's files. In a research session the
+same content is stored in the database: the summary text is `summary_markdown` in
+the analysis report, and each plot is a stored PNG served by URL.
+
 `summary.md` retains the methods, data handling, candidate table, and
 reproducibility sections and adds **Kaplan-Meier survival curves for the top 3
 biomarkers**. Each distinct gene appears once, using its strongest significant
@@ -96,26 +107,32 @@ The other outputs are:
   tests, log-rank statistics/p-values, KM medians, and event/censoring counts.
 - `validation.json`: reference comparison and differences, when requested.
 
-The session agent also writes these plots and statistics for new research runs.
-Downstream evidence labels identify KM median differences and log-rank p-values.
+The session agent produces the same plots and statistics for new research runs
+and stores them in the database. Downstream evidence labels identify KM median
+differences and log-rank p-values.
 
 ## Separate literature overview
 
 Full research sessions retain **both** outputs when generation uses the
 `data_driven` strategy:
 
-- `data_analysis/summary.md`: empirical survival statistics and plots, written
-  when dataset profiling finishes.
-- `final/overview.md`: the literature and mechanistic synthesis, written by
+- **The analysis report**: empirical survival statistics and plots, stored when
+  dataset profiling finishes. Read it at `GET /api/sessions/{id}/analysis`; its
+  `summary_markdown` field is the text that used to be `summary.md`.
+- **The overview**: the literature and mechanistic synthesis, written by
   meta-review when the research session finishes, after hypothesis generation,
-  review, and ranking.
+  review, and ranking. It is stored as a synthesis document and the session
+  points to it as `db:syntheses/<session_id>`.
 
 Meta-review receives the recorded literature sources and the dataset summary as
-context. The research overview links back to the separate dataset report.
-Finalization preserves the dataset report, including when it writes a fallback
-overview after a meta-review failure or a no-op. With no hypotheses, that
-fallback explicitly states that no literature synthesis was available.
-`co-scientist report <session_id>` continues to display `final/overview.md`.
+context. The two are separate documents: the overview does not link to a file; fetch the
+analysis report separately. Finalization preserves the
+analysis report, including when it writes a fallback overview after a
+meta-review failure or a no-op. With no hypotheses, that fallback explicitly
+states that no literature synthesis was available.
+`co-scientist report <session_id>` displays the overview (read via
+`db:syntheses/<session_id>`; sessions from before the move still read their old
+`final/overview.md`).
 
 The standalone statistical validation script does not run the research agents
 or generate a literature overview.

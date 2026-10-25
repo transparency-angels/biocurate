@@ -73,6 +73,10 @@ Atlas cluster instead of local SQLite. SQLite stays the default.
 | **Multi-document transaction** | An Elo update writes an `elo_journal` entry (keyed by match id) and both hypotheses' ratings in one `with_transaction`. Re-applying a match hits the duplicate key and is a no-op. | [`storage/atlas/tournaments.py`](co_scientist/storage/atlas/tournaments.py) |
 | **Atlas Search** (`library_text`, `lucene.english`) | Keyword leg of library retrieval over passage `text` and paper `title`, with a `kind` filter. | [`storage/atlas/indexes.py`](co_scientist/storage/atlas/indexes.py), [`library/search.py`](co_scientist/library/search.py) |
 | **Automated Embedding** (`library_vec`, `autoEmbed`, `voyage-4`) | Atlas embeds each passage on write and the query text at search time, so ingest sends no vectors. `library.embedding = "client"` switches to Voyage embeddings computed in Python. | [`storage/atlas/indexes.py`](co_scientist/storage/atlas/indexes.py) (`library_vec_definition`), [`library/ingest.py`](co_scientist/library/ingest.py) |
+| **GridFS** (`attachments`, `plots` buckets) | Uploaded files and survival-plot PNGs are stored as GridFS files; metadata sits in `attachments_meta` and `analysis_reports`. SQLite keeps the same bytes in a `blobs` table. | [`storage/atlas/blobs.py`](co_scientist/storage/atlas/blobs.py), [`attachments/store.py`](co_scientist/attachments/store.py) |
+| **Change streams** (`timeline`) | `GET /api/sessions/{id}/events` follows the session's timeline collection with a change stream, so a message written by any process reaches the browser live. SQLite polls instead. | [`storage/atlas/watch.py`](co_scientist/storage/atlas/watch.py), [`storage/watch.py`](co_scientist/storage/watch.py) |
+| **Results as documents** | `timeline`, `attachments_meta`, `analysis_reports`, `analysis_points` and `syntheses` hold what used to be JSON and markdown files, served to the React app as JSON. | [`storage/atlas/`](co_scientist/storage/atlas/), [`web/app.py`](co_scientist/web/app.py) |
+| **Session-scoped search** (`library_text_v2`, `library_vec_v2`) | Uploaded documents are indexed as library passages; the v2 indexes filter on `session_id` and `source` so a session only sees its own uploads. | [`storage/atlas/indexes.py`](co_scientist/storage/atlas/indexes.py), [`library/uploads.py`](co_scientist/library/uploads.py) |
 | **Atlas Vector Search** (`hyp_vec`) | Duplicate detection when a hypothesis is generated or evolved, and Ranking's pair similarity. `dotProduct` index with a `session_id` filter; falls back to exact in-memory search while the index is building or returns too few hits. | [`vectors/atlas_store.py`](co_scientist/vectors/atlas_store.py), [`vectors/factory.py`](co_scientist/vectors/factory.py) |
 | **Hybrid Search** (`$rankFusion`) | One aggregation fuses a `$search` branch and a text-query `$vectorSearch` branch (equal weights). | [`library/search.py`](co_scientist/library/search.py) (`build_hybrid_pipeline`) |
 | **Voyage AI** | `voyage-3-large` embeddings for hypotheses, `voyage-4` for library autoEmbed, and `rerank-2.5` over the fused hits (skipped without a key, and the fused order is kept). | [`vectors/embedder.py`](co_scientist/vectors/embedder.py), [`library/search.py`](co_scientist/library/search.py) (`rerank`) |
@@ -332,14 +336,20 @@ co-scientist run "Identify hypotheses about microbiome-driven inflammation" \
   --n 3 --budget-usd 2.0 --wall-clock 600
 ```
 
-This kicks off Generation → Reflection → Ranking → Evolution → Meta-review under the configured backend. The Supervisor schedules tasks, the Elo tournament refines a leaderboard, and the final research overview is written to `data/artifacts/<session_id>/final/overview.md`.
+This kicks off Generation → Reflection → Ranking → Evolution → Meta-review under the configured backend. The Supervisor schedules tasks, the Elo tournament refines a leaderboard, and the final research overview is stored in the database as `db:syntheses/<session_id>` (read it with `co-scientist report <session_id>`, or from the web UI and `GET /api/sessions/{id}/overview`).
 
-For data-driven research, place flat `.csv` files directly in `./data` (or the
-directory set by `[storage] data_dir`). Dataset detection discovers CSV, TSV,
-and tab-delimited TXT files; it never reads SQLite as a research input. Relative
-`data_dir` settings resolve from the project root, consistently with run storage.
-The application still uses `co_scientist.db` internally for sessions and its task
-queue; no database import or conversion is needed for research tables.
+For data-driven research, attach the files to the session: `co-scientist run
+"<goal>" --attach metadata.csv --attach mutations.csv` (repeatable; a `.zip` is
+unpacked), or upload them with the web UI / `POST /api/sessions`. Accepted types
+are `.csv`, `.txt`, `.pdf`, `.docx` and `.zip`; limits are under `[attachments]`
+in the config. The files are stored in the database (MongoDB GridFS on Atlas),
+the planning step sees a short description of each, and tabular files are
+profiled by the data-analysis agent. The report, statistics and plots are stored
+in the database as well; read them from `GET /api/sessions/{id}/analysis`. Nothing
+is read from `./data` or written under `data/artifacts/` for a research session.
+Remove old uploads with `co-scientist attachments prune --older-than DAYS [--yes]`.
+See [docs/storage-integration.md](docs/storage-integration.md) and
+[docs/frontend-api.md](docs/frontend-api.md).
 
 The biomarker profiler expects a clinical table such as `patient_metadata.csv`
 or `metadata.csv`; other filenames are recognized by their headers. Include
@@ -357,13 +367,13 @@ To rerun the biomarker statistics separately from a research session:
 
 ```bash
 python scripts/validate_data_analysis.py --data-dir ./data \
-  --reference data/artifacts/<session_id>/data_analysis/biomarker_candidates.json \
+  --reference ./data/kaplan_meier/biomarker_candidates.json \
   --output-dir ./data/validation
 ```
 
-This needs no LLM, API key, or SQLite database. It uses lifelines Kaplan-Meier
+This standalone script needs no LLM, API key, or database, and reads its input from `--data-dir`. It uses lifelines Kaplan-Meier
 estimates and log-rank comparisons, and embeds survival plots for the top three
-distinct biomarkers in `summary.md`, with 95% confidence bands, censor marks,
+distinct biomarkers in the `summary.md` it writes, with 95% confidence bands, censor marks,
 and numbers at risk. It writes every eligible comparison to `statistical_tests.csv`, and `validation.json`
 with field-by-field differences from the stored results. Exit code 0 means a
 match; 1 means a mismatch. Omit `--reference` for a fresh analysis and optionally
@@ -373,11 +383,12 @@ References generated with older statistical methods produce an expected method
 mismatch; use a new Kaplan-Meier/log-rank artifact to validate the new results.
 
 A full data-driven research session also generates a separate literature and
-mechanistic synthesis at `data/artifacts/<session_id>/final/overview.md` after
-generation, review, and ranking. The overview uses the recorded literature
-sources and dataset results, and links to `data_analysis/summary.md` for the
-statistics and plots. The standalone validation script produces the dataset
-report only; `co-scientist report <session_id>` displays the research overview.
+mechanistic synthesis after generation, review, and ranking. It is stored in the
+database and read via `db:syntheses/<session_id>` (`co-scientist report
+<session_id>`, `GET /api/sessions/{id}/overview`). The overview uses the recorded
+literature sources and dataset results; the dataset statistics and plots are a
+separate report at `GET /api/sessions/{id}/analysis`. The standalone validation
+script produces the dataset report only, as files.
 
 ```bash
 co-scientist serve            # FastAPI + htmx + SSE dashboard at localhost:7878
