@@ -29,6 +29,15 @@ export function rememberCurrentSession(session: CurrentSession) {
   }
 }
 
+export function clearCurrentSession() {
+  try {
+    localStorage.removeItem(STORAGE_KEY)
+    window.dispatchEvent(new Event(UPDATED_EVENT))
+  } catch {
+    // The active route still works if browser storage is unavailable.
+  }
+}
+
 export function subscribeCurrentSession(listener: () => void) {
   window.addEventListener(UPDATED_EVENT, listener)
   window.addEventListener('storage', listener)

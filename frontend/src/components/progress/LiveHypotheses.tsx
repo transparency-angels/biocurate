@@ -51,6 +51,7 @@ export function LiveHypotheses({ hypotheses, sessionId, status }: LiveHypotheses
                   <span className="shrink-0 text-xs text-muted-foreground">{status}</span>
                 </div>
                 <p className="mt-1 max-w-[76ch] whitespace-pre-line text-sm leading-6 text-muted-foreground">{hypothesis.summary}</p>
+                {(hypothesis.state === 'in_tournament' || hypothesis.state === 'pinned' || (hypothesis.state === 'reviewed' && rankedCount === 0)) && <Link to={`/research/${sessionId}/results?hypothesis=${encodeURIComponent(hypothesis.id)}`} className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-brand hover:underline">Open this hypothesis<ArrowRight aria-hidden="true" className="size-3.5" /></Link>}
               </li>
             )
           })}

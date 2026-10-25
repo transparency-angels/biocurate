@@ -137,6 +137,43 @@ async def set_research_plan(conn: aiosqlite.Connection, session_id: str, plan: d
     await conn.commit()
 
 
+async def delete(conn: aiosqlite.Connection, session_id: str) -> bool:
+    """Delete one terminal session and all of its persisted research data."""
+    await conn.execute("BEGIN IMMEDIATE")
+    try:
+        async with conn.execute("SELECT status FROM sessions WHERE id=?", (session_id,)) as cur:
+            session = await cur.fetchone()
+        if session is None:
+            await conn.rollback()
+            return False
+        if session["status"] in {"running", "paused"}:
+            raise ValueError("Stop this research before deleting it.")
+
+        async with conn.execute("SELECT id FROM tournament_matches WHERE session_id=?", (session_id,)) as cur:
+            match_ids = [row["id"] for row in await cur.fetchall()]
+        if match_ids:
+            marks = ",".join("?" for _ in match_ids)
+            await conn.execute(f"DELETE FROM elo_journal WHERE match_id IN ({marks})", match_ids)
+        await conn.execute("DELETE FROM tournament_matches WHERE session_id=?", (session_id,))
+        await conn.execute("DELETE FROM transcripts WHERE session_id=?", (session_id,))
+
+        async with conn.execute("SELECT blob_id FROM attachments WHERE session_id=?", (session_id,)) as cur:
+            blob_ids = [row["blob_id"] for row in await cur.fetchall()]
+        await conn.execute("DELETE FROM attachments WHERE session_id=?", (session_id,))
+        if blob_ids:
+            marks = ",".join("?" for _ in blob_ids)
+            await conn.execute(f"DELETE FROM blobs WHERE id IN ({marks})", blob_ids)
+
+        for table in ("timeline", "analysis_reports", "analysis_points", "syntheses", "spans", "events"):
+            await conn.execute(f"DELETE FROM {table} WHERE session_id=?", (session_id,))
+        await conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
+        await conn.commit()
+        return True
+    except BaseException:
+        await conn.rollback()
+        raise
+
+
 def _row_to_session(row: aiosqlite.Row) -> Session:
     return Session(
         id=row["id"],

@@ -169,3 +169,32 @@ async def set_research_plan(conn: AtlasConn, session_id: str, plan: dict) -> Non
     await conn.coll(_COLL).update_one(
         {"_id": session_id}, {"$set": {"research_plan": plan, "updated_at": now()}}
     )
+
+
+async def delete(conn: AtlasConn, session_id: str) -> bool:
+    """Delete one terminal session and its session-scoped Atlas documents."""
+    session = await conn.coll(_COLL).find_one({"_id": session_id}, {"status": 1})
+    if session is None:
+        return False
+    if session.get("status") in {"running", "paused"}:
+        raise ValueError("Stop this research before deleting it.")
+
+    matches = conn.coll("tournament_matches")
+    match_ids = [row["_id"] async for row in matches.find({"session_id": session_id}, {"_id": 1})]
+    if match_ids:
+        await conn.coll("elo_journal").delete_many({"match_id": {"$in": match_ids}})
+
+    attachment_rows = conn.coll("attachments_meta").find({"session_id": session_id}, {"blob_id": 1})
+    from .blobs import delete as delete_blob
+    async for attachment in attachment_rows:
+        if attachment.get("blob_id"):
+            await delete_blob(conn, "attachments", attachment["blob_id"])
+
+    for collection in (
+        "tournament_matches", "transcripts", "tasks", "system_feedback", "reviews",
+        "embeddings_meta", "spans", "events", "timeline", "attachments_meta",
+        "analysis_reports", "analysis_points", "syntheses", "hypothesis_vectors", "hypotheses",
+    ):
+        await conn.coll(collection).delete_many({"session_id": session_id})
+    result = await conn.coll(_COLL).delete_one({"_id": session_id})
+    return result.deleted_count > 0

@@ -48,10 +48,12 @@ even for a session that could never exist; a well-formed but unknown id gives 40
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/api/sessions` | Start a research session, optionally with files |
+| GET | `/api/sessions` | List recent research sessions for the workspace navigation |
 | GET | `/api/sessions/{id}` | The raw session row |
 | GET | `/api/sessions/{id}/progress` | Durable progress snapshot for restoring elapsed time and agent task statuses after reconnect |
 | GET | `/api/sessions/{id}/research` | The ranked hypotheses in the `ResearchSession` shape; `?include_drafts=true` also returns generated and reviewed hypotheses for live progress |
 | GET | `/api/sessions/{id}/timeline` | Progress messages |
+| GET, POST | `/api/sessions/{id}/chat` | Load or append a persistent, research-grounded conversation |
 | GET | `/api/sessions/{id}/events` | Live stream (SSE) |
 | GET | `/api/sessions/{id}/overview` | The final overview |
 | GET | `/api/sessions/{id}/sources` | The final overview's source list |
@@ -241,6 +243,23 @@ short machine label; treat it as an open string, new kinds appear as features ar
 added), `title`, `body_markdown`, `refs` (list of strings).
 
 An unknown session returns `{"messages": []}`, not a 404.
+
+### `GET, POST /api/sessions/{id}/chat`
+
+`GET` returns persisted user and assistant turns from the session timeline. `POST`
+accepts a JSON body with `message` (1–4000 characters) and optional
+`guide_research` (boolean). The assistant is given the saved session question,
+hypotheses, reviews, synthesis, dataset summary and recent chat turns. When
+`guide_research` is true during a running or paused session, the message is also
+stored as a directive for later Generation and Evolution tasks.
+
+```json
+{"message":"What evidence supports the leading hypothesis?","guide_research":false}
+```
+
+The response contains the newly saved user and assistant timeline messages. A
+completed session remains available for questions, but no longer accepts new
+research directives.
 
 ### `GET /api/sessions/{id}/overview`, `/sources`, `/synthesis`
 

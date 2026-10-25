@@ -98,8 +98,8 @@ function CitationTag({ inner, onCitationSelect }: CitationTagProps) {
                 title={`Go to source ${citation.sourceId}`}
                 className={cn(
                   markerClass,
-                  'rounded-sm text-brand underline-offset-2 transition-colors outline-none',
-                  'hover:underline focus-visible:ring-3 focus-visible:ring-ring/50',
+                  'rounded-sm font-medium text-brand underline decoration-brand/60 underline-offset-2 transition-colors outline-none',
+                  'hover:decoration-brand focus-visible:ring-3 focus-visible:ring-ring/50',
                 )}
               >
                 {label}
@@ -138,6 +138,50 @@ function renderInline(line: string, options: InlineOptions, keyPrefix: string): 
 
   while (index < line.length) {
     const char = line[index]
+
+    const bareUrl = /^https?:\/\/[^\s<>]+/i.exec(line.slice(index))
+    if (bareUrl) {
+      let href = bareUrl[0]
+      let trailing = ''
+      while (/[.,;:!?]$/.test(href)) {
+        trailing = href.slice(-1) + trailing
+        href = href.slice(0, -1)
+      }
+      // Closing punctuation belongs to the sentence unless it balances an opening
+      // parenthesis that is part of the URL itself.
+      while (href.endsWith(')') && (href.match(/\(/g)?.length ?? 0) < (href.match(/\)/g)?.length ?? 0)) {
+        trailing = `)${trailing}`
+        href = href.slice(0, -1)
+      }
+      try {
+        const parsed = new URL(href)
+        if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+          flush()
+          nodes.push(<a key={`${keyPrefix}-u${key++}`} href={parsed.href} target="_blank" rel="noreferrer" className="break-all font-medium text-brand underline decoration-brand/60 underline-offset-[3px] hover:decoration-brand">{href}</a>)
+          plain += trailing
+          index += bareUrl[0].length
+          continue
+        }
+      } catch { /* Invalid URLs remain visible as ordinary text. */ }
+    }
+
+    if (char === '[') {
+      const labelEnd = line.indexOf('](', index + 1)
+      const urlEnd = labelEnd >= 0 ? line.indexOf(')', labelEnd + 2) : -1
+      if (labelEnd > index + 1 && urlEnd > labelEnd + 2) {
+        const label = line.slice(index + 1, labelEnd)
+        const href = line.slice(labelEnd + 2, urlEnd).trim()
+        try {
+          const parsed = new URL(href)
+          if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+            flush()
+            nodes.push(<a key={`${keyPrefix}-l${key++}`} href={parsed.href} target="_blank" rel="noreferrer" className="font-medium text-brand underline decoration-brand/60 underline-offset-[3px] hover:decoration-brand">{renderInline(label, options, `${keyPrefix}-link${key}`)}</a>)
+            index = urlEnd + 1
+            continue
+          }
+        } catch { /* Invalid or relative links remain visible as plain text. */ }
+      }
+    }
 
     if (char === '`') {
       const end = closingAt('`', index + 1)
@@ -209,6 +253,7 @@ interface ListItem {
 
 type Block =
   | { kind: 'paragraph'; text: string }
+  | { kind: 'heading'; level: number; text: string }
   | { kind: 'list'; ordered: boolean; items: ListItem[] }
 
 const BULLET = /^([ \t]*)[-*][ \t]+(.*)$/
@@ -230,6 +275,13 @@ function parseBlocks(source: string): Block[] {
 
   for (const line of source.split('\n')) {
     if (line.trim().length === 0) { flushParagraph(); continue }
+
+    const heading = /^ {0,3}(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line)
+    if (heading) {
+      flushParagraph()
+      blocks.push({ kind: 'heading', level: heading[1].length, text: heading[2] })
+      continue
+    }
 
     const ordered = ORDERED.exec(line)
     const bullet = ordered ? null : BULLET.exec(line)
@@ -284,6 +336,10 @@ export function ScientificText({ children, onCitationSelect, variant = 'reading'
       {blocks.map((block, blockIndex) => {
         if (block.kind === 'paragraph') {
           return <p key={blockIndex}>{renderInline(block.text, options, `b${blockIndex}`)}</p>
+        }
+        if (block.kind === 'heading') {
+          const Heading = block.level <= 2 ? 'h3' : 'h4'
+          return <Heading key={blockIndex} className="font-sans text-base font-semibold leading-6 text-foreground">{renderInline(block.text, options, `b${blockIndex}`)}</Heading>
         }
         const List = block.ordered ? 'ol' : 'ul'
         return (

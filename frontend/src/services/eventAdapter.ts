@@ -315,6 +315,7 @@ export function reduceEvents(events: ResearchEvent[], options: ReduceOptions = {
     const base = { key: event.key, ts: event.ts, agent: null, error: null }
 
     if (event.unknown) {
+      if (event.name === 'timeline_message' && event.payload.kind === 'chat_message') continue
       const title = str(event.payload.title)
       const body = str(event.payload.body_markdown)
       if (event.name === 'timeline_message' && (title || body)) {

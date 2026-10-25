@@ -6,11 +6,12 @@ import { LiveHypotheses } from '@/components/progress/LiveHypotheses'
 import { ResearchActivity } from '@/components/progress/ResearchActivity'
 import { ResearchControls } from '@/components/progress/ResearchControls'
 import { ResearchSessionHeader } from '@/components/progress/ResearchSessionHeader'
+import { ResearchViewSwitch } from '@/components/research/ResearchViewSwitch'
 import { PHASE_STATUS } from '@/components/progress/statusLabels'
 import { Button } from '@/components/ui/button'
 import { useResearchProgress } from '@/hooks/useResearchProgress'
 import { useDocumentTitle } from '@/lib/useDocumentTitle'
-import { getProgressSnapshot, getResearch, getSession, sessionAction, type SessionSnapshot } from '@/services/api'
+import { getCachedProgressSnapshot, getCachedResearch, getCachedSession, getProgressSnapshot, getResearch, getSession, sessionAction, type SessionSnapshot } from '@/services/api'
 import type { ProgressSnapshot } from '@/services/eventAdapter'
 import { isTerminal } from '@/services/eventAdapter'
 import { createSseEventSource } from '@/services/researchEventSource'
@@ -24,9 +25,9 @@ function TitleRow({ action }: { action?: ReactNode }) {
 
 export function ResearchProgress() {
   const { sessionId = '' } = useParams()
-  const [session, setSession] = useState<SessionSnapshot | null>(null)
-  const [research, setResearch] = useState<ResearchSession | null>(null)
-  const [progressSnapshot, setProgressSnapshot] = useState<ProgressSnapshot | undefined>()
+  const [session, setSession] = useState<SessionSnapshot | null>(() => getCachedSession(sessionId) ?? null)
+  const [research, setResearch] = useState<ResearchSession | null>(() => getCachedResearch(sessionId, true) ?? null)
+  const [progressSnapshot, setProgressSnapshot] = useState<ProgressSnapshot | undefined>(() => getCachedProgressSnapshot(sessionId))
   const [error, setError] = useState<string | null>(null)
   const source = useMemo(() => createSseEventSource(sessionId), [sessionId])
   const snapshotStatus = session?.status
@@ -42,6 +43,7 @@ export function ResearchProgress() {
     void getProgressSnapshot(sessionId).then(setProgressSnapshot).catch(() => undefined)
   }, [sessionId])
   const refreshResearch = useCallback(() => getResearch(sessionId, true).then(setResearch).catch(() => undefined), [sessionId])
+  const sessionStatus = session?.status
   useEffect(() => {
     void refresh()
     const timer = window.setInterval(() => void refresh(), 5000)
@@ -49,10 +51,10 @@ export function ResearchProgress() {
   }, [refresh])
   useEffect(() => {
     void refreshResearch()
-    if (session && session.status !== 'running') return
+    if (sessionStatus && sessionStatus !== 'running') return
     const timer = window.setInterval(() => void refreshResearch(), 2500)
     return () => window.clearInterval(timer)
-  }, [refreshResearch, session?.status])
+  }, [refreshResearch, sessionStatus])
   const lastEventKey = events.at(-1)?.key
   const handledEventKey = useRef<string | undefined>(undefined)
   useEffect(() => {
@@ -71,7 +73,8 @@ export function ResearchProgress() {
 
   return (
     <div className="mx-auto w-full max-w-[76rem] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
-      <TitleRow action={finished ? <Button asChild className="h-11 gap-2 rounded-full px-4 sm:h-9"><Link to={`/research/${sessionId}/results`}>View results<ArrowRight aria-hidden="true" /></Link></Button> : undefined} />
+      <ResearchViewSwitch sessionId={sessionId} />
+      <div className="mt-5"><TitleRow action={research && research.hypotheses.length > 0 ? <Button asChild className="h-11 gap-2 rounded-full px-4 sm:h-9"><Link to={`/research/${sessionId}/results`}>{finished ? 'View results' : 'View saved results'}<ArrowRight aria-hidden="true" /></Link></Button> : undefined} /></div>
       {error && <p role="alert" className="mt-3 text-sm text-destructive">{error}</p>}
       {connectionLost && <p role="status" className="mt-3 text-sm text-muted-foreground">Reconnecting to the live event stream…</p>}
       <p role="status" className="sr-only">Session status: {PHASE_STATUS[progress.phase].label}</p>

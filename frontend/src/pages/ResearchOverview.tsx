@@ -51,7 +51,8 @@ export function ResearchOverview() {
 
   return (
     <div className="mx-auto w-full max-w-[76rem] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
-      <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
+      <ResearchViewSwitch sessionId={sessionId ?? ''} />
+      <div className="mt-5">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <h1 className="text-2xl font-semibold tracking-[-0.01em] text-foreground">Research overview</h1>
@@ -60,7 +61,6 @@ export function ResearchOverview() {
             The final synthesis recorded for this research session.
           </p>
         </div>
-        <ResearchViewSwitch sessionId={sessionId ?? ''} />
       </div>
 
       {loading && <p className="mt-8 text-sm text-muted-foreground">Loading the research synthesis…</p>}

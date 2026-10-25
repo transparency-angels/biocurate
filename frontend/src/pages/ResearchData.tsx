@@ -40,10 +40,8 @@ export function ResearchData() {
   if (error && sessionStatus === null) return <NotFoundPage title="Dataset analysis unavailable" message={error} />
   return (
     <div className="mx-auto w-full max-w-[76rem] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
-      <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
-        <div><h1 className="text-2xl font-semibold tracking-[-0.01em] text-foreground">Dataset analysis</h1><p className="mt-1 text-sm leading-6 text-muted-foreground">Analysis and files attached to this research session.</p></div>
-        <ResearchViewSwitch sessionId={sessionId} />
-      </div>
+      <ResearchViewSwitch sessionId={sessionId} />
+      <div className="mt-5"><h1 className="text-2xl font-semibold tracking-[-0.01em] text-foreground">Dataset analysis</h1><p className="mt-1 text-sm leading-6 text-muted-foreground">Analysis and files attached to this research session.</p></div>
       {error && <p role="status" className="mt-4 text-sm text-muted-foreground">Could not refresh just now. Showing the latest saved analysis.</p>}
 
       {attachments.length > 0 && (

@@ -21,7 +21,7 @@ export function SourceCard({ source }: { source: SourceRecord }) {
             href={source.url}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex items-center gap-1 rounded-sm font-medium text-brand underline-offset-4 outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring/50"
+            className="inline-flex items-center gap-1 rounded-sm font-medium text-brand underline decoration-brand/60 underline-offset-4 outline-none hover:decoration-brand focus-visible:ring-3 focus-visible:ring-ring/50"
           >
             Open source paper
             <ArrowUpRight aria-hidden="true" className="size-4" />

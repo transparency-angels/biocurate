@@ -371,4 +371,7 @@ def _build_session_context(goal: str, plan: ResearchPlan, sys_feedback_text: str
 
 async def _latest_system_feedback(deps: AgentDeps, session_id: str) -> str | None:
     fb = await fb_repo.latest_system_feedback(deps.db, session_id)
-    return fb.text if fb is not None else None
+    directives = await fb_repo.active_for_session(deps.db, session_id)
+    human = [f.text for f in directives if f.source == "human" and f.kind == "directive"][:8]
+    parts = ([fb.text] if fb is not None else []) + list(reversed(human))
+    return "\n\n".join(parts) if parts else None

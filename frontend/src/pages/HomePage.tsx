@@ -62,7 +62,7 @@ export function HomePage({ onSubmitResearch }: HomePageProps) {
                   </div>
                 </div>
                 <Button asChild variant="outline" className="h-9 shrink-0 gap-2 rounded-full px-3.5">
-                  <Link to={`/research/${currentSession.id}/progress`}>Continue<ArrowRight aria-hidden="true" className="size-4" /></Link>
+                  <Link to={`/research/${currentSession.id}/chat`}>Continue<ArrowRight aria-hidden="true" className="size-4" /></Link>
                 </Button>
               </section>
             )}

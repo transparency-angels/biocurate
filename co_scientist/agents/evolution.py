@@ -355,7 +355,10 @@ class EvolutionAgent(BaseAgent):
 
     async def _latest_feedback(self, session_id: str) -> str | None:
         fb = await fb_repo.latest_system_feedback(self.deps.db, session_id)
-        return fb.text if fb is not None else None
+        directives = await fb_repo.active_for_session(self.deps.db, session_id)
+        human = [f.text for f in directives if f.source == "human" and f.kind == "directive"][:8]
+        parts = ([fb.text] if fb is not None else []) + list(reversed(human))
+        return "\n\n".join(parts) if parts else None
 
 
 # ----------------------------- formatting helpers ----------------------------- #
