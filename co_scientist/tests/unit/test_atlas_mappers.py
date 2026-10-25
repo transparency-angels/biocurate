@@ -57,6 +57,25 @@ def test_hypothesis_from_doc_tolerates_missing_parent_ids_and_naive_dates() -> N
     assert a_hyp._from_doc(doc) == h
 
 
+def test_hypothesis_from_doc_defaults_citations_and_data_evidence() -> None:
+    doc = {
+        "_id": "hyp_legacy",
+        "session_id": "ses_leg",
+        "created_at": T0,
+        "created_by": "generation",
+        "strategy": "literature",
+        "title": "Legacy Title",
+        "summary": "Legacy summary",
+        "full_text": "Legacy full text",
+        "artifact_path": "artifacts/ses_leg/hypotheses/hyp_legacy.json",
+        "matches_played": 0,
+        "state": "draft",
+    }
+    h = a_hyp._from_doc(doc)
+    assert h.citations == []
+    assert h.data_evidence is None
+
+
 def test_session_doc_roundtrip_nested_plan() -> None:
     s = Session(
         id="ses_1", created_at=T0, updated_at=T0, status="running", research_goal="g",

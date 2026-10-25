@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 
+from co_scientist.config import Config, StorageCfg
 from co_scientist.mcp.protocol import (
     METHOD_NOT_FOUND,
     McpStdioServer,
@@ -29,6 +30,10 @@ from co_scientist.tools.urls import extract_urls
 
 @pytest.fixture
 def server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CoScientistMcpServer:
+    cfg = Config(
+        storage=StorageCfg(backend="sqlite", data_dir=str(tmp_path)),
+    )
+    monkeypatch.setattr("co_scientist.mcp.server.load_config", lambda *a, **k: cfg)
     monkeypatch.setenv("COSCI_CAPTURE_DIR", str(tmp_path / "cap"))
     monkeypatch.setenv("COSCI_RECORD_TOOLS", "record_hypothesis,record_research_plan")
     monkeypatch.setenv("COSCI_AGENT", "generation")

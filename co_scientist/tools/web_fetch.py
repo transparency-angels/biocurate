@@ -367,6 +367,18 @@ def _is_private_ip(host: str) -> bool:
     targets even when the user-supplied URL passes the scheme check.
     """
     try:
+        ip = ipaddress.ip_address(host)
+        return (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        )
+    except ValueError:
+        pass
+    try:
         infos = socket.getaddrinfo(host, None)
     except OSError:
         # If we can't resolve, be conservative: refuse.

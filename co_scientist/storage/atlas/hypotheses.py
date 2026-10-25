@@ -30,7 +30,10 @@ def _to_doc(h: Hypothesis) -> dict[str, Any]:
         "matches_played": h.matches_played,
         "state": h.state,
         "dedup_cluster": h.dedup_cluster,
-        "citations": [c.model_dump(mode="json") for c in h.citations],
+        "citations": [
+            c.model_dump(mode="json") if hasattr(c, "model_dump") else c
+            for c in (h.citations or [])
+        ],
         "data_evidence": h.data_evidence,
     }
 
@@ -46,13 +49,13 @@ def _from_doc(d: dict[str, Any]) -> Hypothesis:
         title=d["title"],
         summary=d["summary"],
         full_text=d["full_text"],
-        citations=[CitedPaper.model_validate(c) for c in d.get("citations") or []],
+        citations=[CitedPaper.model_validate(c) for c in (d.get("citations") or [])],
         artifact_path=d["artifact_path"],
         elo=d.get("elo"),
-        matches_played=d["matches_played"],
-        state=d["state"],
+        matches_played=d.get("matches_played", 0),
+        state=d.get("state", "draft"),
         dedup_cluster=d.get("dedup_cluster"),
-        data_evidence=d.get("data_evidence"),
+        data_evidence=d.get("data_evidence", None),
     )
 
 
