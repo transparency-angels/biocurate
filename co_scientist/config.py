@@ -51,6 +51,9 @@ class LibraryCfg(BaseModel):
     rerank_model: str = "rerank-2.5"
     search_index: str = "library_text"
     vector_index: str = "library_vec"
+    scoped_search_index: str = "library_text_v2"
+    scoped_vector_index: str = "library_vec_v2"
+    """v2 indexes add `session_id`/`source` filter fields; used once both are queryable."""
     max_passage_chars: int = 2000
 
 

@@ -180,7 +180,7 @@ async def test_ensure_indexes_registers_btree_set():
     assert idem[0]["partialFilterExpression"] == {"idempotency_key": {"$type": "string"}}
     assert "library" in conn.colls
     lib = {s.name for s in idx.SEARCH_INDEX_SPECS if s.collection == "library"}
-    assert lib == {"library_text", "library_vec"}  # Task 7 registers its own
+    assert lib == {"library_text", "library_vec", "library_text_v2", "library_vec_v2"}
 
 
 async def test_wait_for_search_index_times_out_false():

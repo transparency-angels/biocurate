@@ -15,9 +15,14 @@ if TYPE_CHECKING:
 _DEDUPE_SUFFIX = re.compile(r"~\d+$")
 
 
-def passage_url(pmcid: str, anchor_id: str) -> str:
-    """Europe PMC link to the passage; ingest's `~N` dedupe suffix is not a real fragment."""
+def passage_url(pmcid: str, anchor_id: str, *, attachment_id: str | None = None) -> str:
+    """Link to the passage; ingest's `~N` dedupe suffix is not a real fragment.
+
+    Uploads (`attachment_id` given) get `upload://{attachment_id}#{fragment}`.
+    """
     fragment = _DEDUPE_SUFFIX.sub("", anchor_id.split("#", 1)[-1])
+    if attachment_id:
+        return f"upload://{attachment_id}#{fragment}"
     return f"https://europepmc.org/article/PMC/{pmcid}#{fragment}"
 
 
@@ -27,8 +32,14 @@ async def upsert_passages(
     passages: list[Passage],
     *,
     embeddings: list[list[float]] | None = None,
+    source: str = "europepmc",
+    session_id: str | None = None,
+    attachment_id: str | None = None,
 ) -> int:
-    """Replace-upsert each passage by `_id = anchor_id`; returns the passage count."""
+    """Replace-upsert each passage by `_id = anchor_id`; returns the passage count.
+
+    `source`/`session_id` scope search: uploads carry `source="upload"` and their session.
+    """
     if not passages:
         return 0
     if embeddings is not None and len(embeddings) != len(passages):
@@ -48,9 +59,12 @@ async def upsert_passages(
             "label": p.label,
             "text": p.text,
             "ordinal": p.ordinal,
-            "url": passage_url(meta.pmcid, p.anchor_id),
+            "url": passage_url(meta.pmcid, p.anchor_id, attachment_id=attachment_id),
+            "source": source,
             "ingested_at": now,
         }
+        if session_id is not None:
+            doc["session_id"] = session_id
         if embeddings is not None:
             doc["embedding"] = embeddings[i]
         ops.append(ReplaceOne({"_id": p.anchor_id}, doc, upsert=True))

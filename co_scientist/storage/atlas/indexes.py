@@ -48,8 +48,23 @@ LIBRARY_TEXT_INDEX: dict = {
 }
 
 
-def library_vec_definition(cfg: Config) -> dict:
-    """Vector index for `library`: Atlas autoEmbed on `text`, or a client `embedding`."""
+LIBRARY_TEXT_INDEX_V2: dict = {
+    "mappings": {
+        "dynamic": False,
+        "fields": {
+            **LIBRARY_TEXT_INDEX["mappings"]["fields"],
+            "session_id": {"type": "token"},
+            "source": {"type": "token"},
+        },
+    }
+}
+
+
+def library_vec_definition(cfg: Config, *, scoped: bool = False) -> dict:
+    """Vector index for `library`: Atlas autoEmbed on `text`, or a client `embedding`.
+
+    `scoped` (the v2 index) also lets queries filter on `session_id` and `source`.
+    """
     if cfg.library.embedding == "auto":
         field = {
             "type": "autoEmbed",
@@ -64,7 +79,8 @@ def library_vec_definition(cfg: Config) -> dict:
             "numDimensions": cfg.embeddings.dim,
             "similarity": "dotProduct",
         }
-    return {"fields": [field, *_LIB_FILTERS]}
+    extra = [{"type": "filter", "path": "session_id"}, {"type": "filter", "path": "source"}]
+    return {"fields": [field, *_LIB_FILTERS, *(extra if scoped else [])]}
 
 
 def hyp_vec_definition(cfg: Config) -> dict:
@@ -87,6 +103,11 @@ SEARCH_INDEX_SPECS.extend(
     [
         SearchIndexSpec("library", "library_text", "search", lambda cfg: LIBRARY_TEXT_INDEX),
         SearchIndexSpec("library", "library_vec", "vectorSearch", library_vec_definition),
+        SearchIndexSpec("library", "library_text_v2", "search", lambda cfg: LIBRARY_TEXT_INDEX_V2),
+        SearchIndexSpec(
+            "library", "library_vec_v2", "vectorSearch",
+            lambda cfg: library_vec_definition(cfg, scoped=True),
+        ),
         SearchIndexSpec("hypothesis_vectors", "hyp_vec", "vectorSearch", hyp_vec_definition),
     ]
 )

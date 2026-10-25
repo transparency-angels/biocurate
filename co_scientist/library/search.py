@@ -28,6 +28,8 @@ class LibraryHit:
     url: str
     fused_score: float
     rerank_score: float | None = None
+    source: str = ""
+    session_id: str | None = None
 
 
 def rrf(lists: list[list[str]], k: int = 60) -> list[tuple[str, float]]:
@@ -39,6 +41,22 @@ def rrf(lists: list[list[str]], k: int = 60) -> list[tuple[str, float]]:
     return sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
 
 
+def _text_scope(session_id: str | None) -> dict:
+    """`$search` clause hiding other sessions' uploads; passages with no `source` stay visible."""
+    upload = {"equals": {"path": "source", "value": "upload"}}
+    if session_id is None:
+        return upload
+    own = {"equals": {"path": "session_id", "value": session_id}}
+    return {"compound": {"must": [upload], "mustNot": [own]}}
+
+
+def _vector_scope(session_id: str | None) -> dict:
+    not_upload = {"source": {"$ne": "upload"}}
+    if session_id is None:
+        return not_upload
+    return {"$or": [not_upload, {"session_id": session_id}]}
+
+
 def build_hybrid_pipeline(
     cfg: Config,
     query: str,
@@ -46,22 +64,30 @@ def build_hybrid_pipeline(
     k: int,
     kind: str | None = None,
     query_vector: list[float] | None = None,
+    session_id: str | None = None,
+    scoped: bool = False,
 ) -> list[dict]:
-    """One `$rankFusion` over a `$search` branch and a `$vectorSearch` branch."""
+    """One `$rankFusion` over a `$search` branch and a `$vectorSearch` branch.
+
+    `scoped` selects the v2 indexes and filters both branches to the Europe PMC passages plus
+    `session_id`'s own uploads (none when `session_id` is None). Otherwise the v1 indexes are
+    used unfiltered and the caller must drop other sessions' uploads itself.
+    """
     lib = cfg.library
     n = 4 * k
     text_op: dict = {"text": {"query": query, "path": ["text", "title"]}}
-    if kind:
-        search = {
-            "index": lib.search_index,
-            "compound": {
-                "must": [text_op],
-                "filter": [{"equals": {"path": "kind", "value": kind}}],
-            },
-        }
+    text_index = lib.scoped_search_index if scoped else lib.search_index
+    vector_index = lib.scoped_vector_index if scoped else lib.vector_index
+    if kind or scoped:
+        compound: dict = {"must": [text_op]}
+        if kind:
+            compound["filter"] = [{"equals": {"path": "kind", "value": kind}}]
+        if scoped:
+            compound["mustNot"] = [_text_scope(session_id)]
+        search = {"index": text_index, "compound": compound}
     else:
-        search = {"index": lib.search_index, **text_op}
-    vector: dict = {"index": lib.vector_index, "numCandidates": 20 * k, "limit": n}
+        search = {"index": text_index, **text_op}
+    vector: dict = {"index": vector_index, "numCandidates": 20 * k, "limit": n}
     if lib.embedding == "auto":
         vector["path"] = "text"
         vector["query"] = {"text": query}
@@ -70,8 +96,13 @@ def build_hybrid_pipeline(
             raise ValueError("client embedding mode needs query_vector")
         vector["path"] = "embedding"
         vector["queryVector"] = query_vector
-    if kind:
-        vector["filter"] = {"kind": kind}
+    vfilters = ([{"kind": kind}] if kind else []) + (
+        [_vector_scope(session_id)] if scoped else []
+    )
+    if len(vfilters) == 1:
+        vector["filter"] = vfilters[0]
+    elif vfilters:
+        vector["filter"] = {"$and": vfilters}
     return [
         {
             "$rankFusion": {
@@ -88,7 +119,8 @@ def build_hybrid_pipeline(
         {
             "$project": {
                 "_id": 1, "pmcid": 1, "title": 1, "section": 1, "kind": 1, "label": 1,
-                "text": 1, "url": 1, "fused_score": {"$meta": "score"},
+                "text": 1, "url": 1, "source": 1, "session_id": 1,
+                "fused_score": {"$meta": "score"},
             }
         },
     ]
@@ -104,6 +136,8 @@ def _to_hit(doc: dict) -> LibraryHit:
         label=doc.get("label"),
         text=doc.get("text", ""),
         url=doc.get("url", ""),
+        source=doc.get("source", ""),
+        session_id=doc.get("session_id"),
         fused_score=float(doc.get("fused_score") or 0.0),
     )
 
@@ -133,9 +167,39 @@ async def rerank(cfg: Config, query: str, hits: list[LibraryHit], top_k: int) ->
         return hits[:top_k]
 
 
+# (db name, collection prefix) -> whether both v2 indexes were queryable when first checked.
+_SCOPED_READY: dict[tuple[str, str], bool] = {}
+
+
+async def scoped_indexes_ready(conn: AtlasConn, cfg: Config) -> bool:
+    """True once both v2 indexes are queryable; checked once per process per connection prefix."""
+    key = (conn.db.name, conn.prefix)
+    if key not in _SCOPED_READY:
+        lib = cfg.library
+        cur = await conn.coll("library").list_search_indexes()
+        ready = {d["name"] for d in await cur.to_list() if d.get("queryable")}
+        _SCOPED_READY[key] = {lib.scoped_search_index, lib.scoped_vector_index} <= ready
+    return _SCOPED_READY[key]
+
+
+def _visible(hit: LibraryHit, session_id: str | None) -> bool:
+    return hit.source != "upload" or (session_id is not None and hit.session_id == session_id)
+
+
 async def hybrid_search(
-    conn: AtlasConn, cfg: Config, query: str, *, k: int = 8, kind: str | None = None
+    conn: AtlasConn,
+    cfg: Config,
+    query: str,
+    *,
+    k: int = 8,
+    kind: str | None = None,
+    session_id: str | None = None,
 ) -> list[LibraryHit]:
+    """Hybrid search over Europe PMC passages plus `session_id`'s own uploads.
+
+    With the v2 indexes queryable the scope is a server-side filter. Until then the v1 indexes
+    are queried unfiltered (over-fetching) and other sessions' uploads are dropped here.
+    """
     if k < 1:
         raise ValueError("k must be >= 1")
     qvec = None
@@ -143,7 +207,13 @@ async def hybrid_search(
         from ..vectors.embedder import make_embedder
 
         qvec = [float(x) for x in (await make_embedder(cfg).embed([query]))[0]]
-    pipeline = build_hybrid_pipeline(cfg, query, k=k, kind=kind, query_vector=qvec)
+    scoped = await scoped_indexes_ready(conn, cfg)
+    pipeline = build_hybrid_pipeline(
+        cfg, query, k=k if scoped else 2 * k, kind=kind, query_vector=qvec,
+        session_id=session_id, scoped=scoped,
+    )
     cur = await conn.coll("library").aggregate(pipeline)
     hits = [_to_hit(d) for d in await cur.to_list()]
+    if not scoped:
+        hits = [h for h in hits if _visible(h, session_id)]
     return await rerank(cfg, query, hits, k)
