@@ -477,9 +477,10 @@ def attachments_prune(
                 return 0
             for a in old:
                 if isinstance(conn, AtlasConn) and a.kind == "document":
+                    from .library.uploads import upload_pmcid
                     from .storage.atlas import library as lib_store
 
-                    await lib_store.delete_paper(conn, f"UPLOAD{a.id[-12:]}")
+                    await lib_store.delete_paper(conn, upload_pmcid(a.id))
                 await blobs.delete(conn, "attachments", a.blob_id)
                 await att_repo.delete(conn, a.id)
             console.print(f"Deleted {len(old)} attachment(s).")

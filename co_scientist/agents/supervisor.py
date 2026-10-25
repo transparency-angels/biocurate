@@ -17,6 +17,7 @@ Responsibilities:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 from datetime import UTC, datetime
@@ -212,7 +213,19 @@ class Supervisor:
         files = attachments or []
         await check_quota(conn, self.cfg, None, files)
         session = await self._create_session(conn, goal, preferences_text, wall_clock_seconds)
-        stored = await store_incoming(conn, self.cfg, session.id, files)
+        try:
+            await self._store_attachments(conn, session.id, files, skipped or [])
+        except BaseException:
+            # Don't leave a half-created session looking like it is running.
+            with contextlib.suppress(Exception):
+                await sess_repo.set_status(conn, session.id, "failed")
+            raise
+        return session
+
+    async def _store_attachments(
+        self, conn: Conn, session_id: str, files: list[IncomingFile], skipped: list[str],
+    ) -> None:
+        stored = await store_incoming(conn, self.cfg, session_id, files)
         if _is_atlas(conn):
             for meta in stored:
                 if meta.kind != "document":  # parse_document reads PDF and DOCX only
@@ -225,12 +238,11 @@ class Supervisor:
                     )
         if stored or skipped:
             lines = [f"{a.filename} \u00b7 {a.kind} \u00b7 {a.size}" for a in stored]
-            lines += [f"Skipped: {s}" for s in skipped or []]
+            lines += [f"Skipped: {s}" for s in skipped]
             await timeline.post(
-                conn, session.id, kind="attachments_received",
+                conn, session_id, kind="attachments_received",
                 title="Attachments received", body="\n".join(lines),
             )
-        return session
 
     async def _create_session(
         self,

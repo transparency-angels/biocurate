@@ -15,6 +15,7 @@ from typing import Any
 import httpx
 import pytest
 import pytest_asyncio
+from structlog.testing import capture_logs
 
 from co_scientist import ids
 from co_scientist.agents.supervisor import Supervisor
@@ -230,13 +231,73 @@ async def test_post_sessions_ingest_failure_does_not_fail_upload(
 
     monkeypatch.setattr(sup_mod, "_is_atlas", lambda conn: True)
     monkeypatch.setattr(sup_mod, "ingest_attachment", boom)
-    async with _client(tmp_cfg) as c:
-        r = await c.post("/api/sessions", data={"question": "q"}, files=[
-            ("files", ("paper.pdf", b"%PDF-1.4 x", "application/pdf")),
-            ("files", ("a.csv", b"a,b\n", "text/csv")),
-        ])
+    with capture_logs() as logs:
+        async with _client(tmp_cfg) as c:
+            r = await c.post("/api/sessions", data={"question": "q"}, files=[
+                ("files", ("paper.pdf", b"%PDF-1.4 x", "application/pdf")),
+                ("files", ("a.csv", b"a,b\n", "text/csv")),
+            ])
     assert r.status_code == 201
     assert calls == ["paper.pdf"]  # tabular files are never ingested
+    assert "secret detail" not in r.text
+    assert "secret detail" not in repr(logs)
+    failed = [e for e in logs if e["event"] == "upload_ingest_failed"]
+    assert failed and failed[0]["error"] == "RuntimeError"
+
+
+async def test_background_run_db_error_logs_type_only(
+    tmp_cfg, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+
+    from pymongo.errors import ServerSelectionTimeoutError
+
+    async def boom(self, goal, **kw):
+        raise ServerSelectionTimeoutError("secret host db0.internal:27017")
+
+    monkeypatch.setattr(Supervisor, "run_session", boom)
+    app = create_app(tmp_cfg)
+    transport = httpx.ASGITransport(app=app)
+    with capture_logs() as logs:
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            r = await c.post("/api/sessions", data={"question": "q"})
+            assert r.status_code == 201
+            task = app.state.background_runs.get(r.json()["session_id"])
+            if task is not None:
+                await task
+            # The older HTML form route starts its run the same way.
+            form = await c.post("/sessions/new", data={"goal": "g"})
+            assert form.status_code == 303
+            for _ in range(20):
+                await asyncio.sleep(0)
+    failures = [e for e in logs if e["event"] == "background_run_failed"]
+    assert len(failures) == 2
+    assert all(e["err_type"] == "ServerSelectionTimeoutError" for e in failures)
+    assert all("exc_info" not in e for e in failures)  # no traceback rendered
+    assert "secret host" not in repr(logs)
+
+
+async def test_prepare_session_marks_half_created_session_failed(
+    tmp_cfg, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import co_scientist.agents.supervisor as sup_mod
+    from co_scientist.attachments.intake import IncomingFile
+
+    async def boom(conn, cfg, session_id, files):
+        raise RuntimeError("store failed")
+
+    monkeypatch.setattr(sup_mod, "store_incoming", boom)
+    conn = await db_mod.connect(tmp_cfg)
+    try:
+        with pytest.raises(RuntimeError, match="store failed"):
+            await Supervisor(tmp_cfg).prepare_session(
+                conn, "g", attachments=[IncomingFile("a.csv", b"a\n", "text/csv", "tabular")],
+            )
+        (row,) = await sess_repo.list_with_stats(conn)
+        session = await sess_repo.fetch(conn, row["id"])
+        assert session is not None and session.status == "failed"
+    finally:
+        await conn.close()
 
 
 # ---------------------------------------------------------------- /research --
@@ -423,6 +484,23 @@ async def test_plots_route_streams_png_and_404s_unknown(tmp_cfg) -> None:
         assert (await c.get(f"/api/sessions/{sid}/plots/nope")).status_code == 404
         other = await _make_session(tmp_cfg)
         assert (await c.get(f"/api/sessions/{other}/plots/kaplan_meier_1")).status_code == 404
+
+
+async def test_plot_urls_are_encoded_and_still_route(tmp_cfg) -> None:
+    sid = await _make_session(tmp_cfg)
+    conn = await db_mod.connect(tmp_cfg)
+    try:
+        blob_id = await blobs.put(conn, "plots", "km.png", PNG, {"session_id": sid})
+        await analysis_repo.save_report(conn, sid, {"plots": [
+            {"name": "km #1?x", "blob_id": blob_id, "content_type": "image/png"}
+        ]})
+    finally:
+        await conn.close()
+    async with _client(tmp_cfg) as c:
+        (plot,) = (await c.get(f"/api/sessions/{sid}/analysis")).json()["plots"]
+        assert plot["url"] == f"/api/sessions/{sid}/plots/km%20%231%3Fx"
+        r = await c.get(plot["url"])
+    assert r.status_code == 200 and r.content == PNG
 
 
 async def test_plots_route_404s_when_blob_is_gone(tmp_cfg) -> None:

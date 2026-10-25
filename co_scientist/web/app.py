@@ -22,6 +22,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import quote
 
 from fastapi import (
     APIRouter,
@@ -162,6 +163,9 @@ def create_app(cfg: Config | None = None) -> FastAPI:
                     goal=goal, preferences_text=preferences or None,
                     n_initial=n_initial, wall_clock_seconds=wall_clock_seconds,
                 )
+            except PyMongoError as e:
+                # The PyMongo message (and traceback) can name hosts; log the type only.
+                log.error("background_run_failed", err_type=type(e).__name__)
             except Exception:
                 log.exception("background_run_failed")
 
@@ -362,7 +366,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         report["plots"] = [
             {
                 **{k: v for k, v in p.items() if k != "blob_id"},
-                "url": f"/api/sessions/{session_id}/plots/{p.get('name', '')}",
+                "url": f"/api/sessions/{session_id}/plots/{quote(str(p.get('name', '')), safe='')}",
             }
             for p in report.get("plots", [])
         ]
@@ -526,6 +530,11 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         async def _run() -> None:
             try:
                 await sup.run_session(goal=goal, session_id=session.id)
+            except PyMongoError as e:
+                # The PyMongo message (and traceback) can name hosts; log the type only.
+                log.error(
+                    "background_run_failed", session_id=session.id, err_type=type(e).__name__,
+                )
             except Exception:
                 log.exception("background_run_failed", session_id=session.id)
             finally:

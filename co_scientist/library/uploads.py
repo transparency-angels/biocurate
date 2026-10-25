@@ -24,6 +24,11 @@ _BLANK_LINES = re.compile(r"\n\s*\n")
 _WS = re.compile(r"\s+")
 
 
+def upload_pmcid(attachment_id: str) -> str:
+    """The library paper id under which an uploaded document's passages are stored."""
+    return f"UPLOAD{attachment_id[-12:]}"
+
+
 def _pdf_blocks(data: bytes) -> list[tuple[str, str]]:
     from pypdf import PdfReader
 
@@ -69,7 +74,7 @@ def parse_document(
         raise
     except Exception as e:  # pypdf / python-docx / zipfile raise assorted types
         raise ValueError(UNREADABLE) from e
-    pmcid = f"UPLOAD{attachment_id[-12:]}"
+    pmcid = upload_pmcid(attachment_id)
     passages: list[Passage] = []
     for section, raw in blocks:
         text = _WS.sub(" ", raw).strip()
@@ -112,7 +117,7 @@ async def ingest_attachment(conn: AtlasConn, cfg: Config, meta: AttachmentMeta) 
     except Exception as e:
         log.warning("upload_ingest_failed", attachment_id=meta.id, error=type(e).__name__)
         try:  # a partial bulk write may have stored some passages
-            await lib_store.delete_paper(conn, f"UPLOAD{meta.id[-12:]}")
+            await lib_store.delete_paper(conn, upload_pmcid(meta.id))
         except Exception as ce:
             log.warning("upload_cleanup_failed", attachment_id=meta.id, error=type(ce).__name__)
         await attachments.set_status(conn, meta.id, "failed", UNREADABLE)
