@@ -84,3 +84,15 @@ async def has_paper(conn: AtlasConn, pmcid: str) -> bool:
 
 async def count(conn: AtlasConn) -> int:
     return await conn.coll("library").count_documents({})
+
+
+async def journals_by_pmcid(conn: AtlasConn, pmcids: list[str]) -> dict[str, str]:
+    """Journal name per library paper, for the papers that have one (uses `library_pmcid`)."""
+    if not pmcids:
+        return {}
+    pipeline = [
+        {"$match": {"pmcid": {"$in": list(pmcids)}, "journal": {"$nin": [None, ""]}}},
+        {"$group": {"_id": "$pmcid", "journal": {"$first": "$journal"}}},
+    ]
+    cur = await conn.coll("library").aggregate(pipeline)
+    return {d["_id"]: d["journal"] async for d in cur}

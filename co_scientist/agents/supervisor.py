@@ -27,6 +27,7 @@ from ..attachments.intake import IncomingFile
 from ..attachments.inventory import build_inventory
 from ..attachments.store import check_quota, store_incoming
 from ..config import Config
+from ..library.uploads import ingest_attachment
 from ..llm.budgets import TokenBudget
 from ..llm.prompts import render
 from ..llm.provider import get_provider
@@ -48,6 +49,7 @@ from ..orchestrator.termination import (
 from ..safety.quoting import quote_untrusted
 from ..storage import Conn
 from ..storage import db as db_mod
+from ..storage.atlas.client import AtlasConn
 from ..storage.repos import analysis as analysis_repo
 from ..storage.repos import events as events_repo
 from ..storage.repos import feedback as fb_repo
@@ -84,12 +86,27 @@ class Supervisor:
         wall_clock_seconds: int | None = None,
         resume_session_id: str | None = None,
         attachments: list[IncomingFile] | None = None,
+        session_id: str | None = None,
     ) -> str:
+        """Run a session to completion.
+
+        `session_id` names a session already set up by `prepare_session` (the web API
+        does that inside the request); `resume_session_id` resumes an interrupted run.
+        """
+        if session_id is not None and attachments:
+            raise ValueError("attachments belong to prepare_session when session_id is given")
         conn = await db_mod.connect(self.cfg)
         try:
             if resume_session_id is None:
-                await check_quota(conn, self.cfg, None, attachments or [])
-                session = await self._create_session(conn, goal, preferences_text, wall_clock_seconds)
+                if session_id is None:
+                    session = await self.prepare_session(
+                        conn, goal, preferences_text, wall_clock_seconds, attachments,
+                    )
+                else:
+                    found = await sess_repo.fetch(conn, session_id)
+                    if found is None:
+                        raise RuntimeError(f"no such session: {session_id}")
+                    session = found
                 bind(session_id=session.id)
                 log.info(
                     "session_started",
@@ -109,15 +126,6 @@ class Supervisor:
                 tools = ToolRegistry(self.cfg).discover()
                 deps = AgentDeps(cfg=self.cfg, db=conn, llm=llm, tools=tools)
 
-                stored = await store_incoming(conn, self.cfg, session.id, attachments or [])
-                if stored:
-                    await timeline.post(
-                        conn, session.id, kind="attachments_received",
-                        title="Attachments received",
-                        body="\n".join(
-                            f"{a.filename} \u00b7 {a.kind} \u00b7 {a.size}" for a in stored
-                        ),
-                    )
                 inventory = await build_inventory(conn, self.cfg, session.id)
                 plan = await self._parse_goal(deps, session, goal, preferences_text, inventory)
                 await self._apply_plan(conn, session, plan)
@@ -183,6 +191,46 @@ class Supervisor:
             await conn.close()
 
     # ----------------------------- session bootstrap ----------------------------- #
+
+    async def prepare_session(
+        self,
+        conn: Conn,
+        goal: str,
+        preferences_text: str | None = None,
+        wall_clock_seconds: int | None = None,
+        attachments: list[IncomingFile] | None = None,
+        *,
+        skipped: list[str] | None = None,
+    ) -> Session:
+        """Create the session row and store its attachments, before any agent runs.
+
+        Raises `AttachmentQuotaError` before the row exists. On Atlas, uploaded PDF and
+        DOCX files are ingested into the session-scoped library; a failed ingest marks
+        the attachment `failed` and never fails the call. `skipped` lists zip members
+        that were not stored, for the timeline.
+        """
+        files = attachments or []
+        await check_quota(conn, self.cfg, None, files)
+        session = await self._create_session(conn, goal, preferences_text, wall_clock_seconds)
+        stored = await store_incoming(conn, self.cfg, session.id, files)
+        if _is_atlas(conn):
+            for meta in stored:
+                if meta.kind != "document":  # parse_document reads PDF and DOCX only
+                    continue
+                try:
+                    await ingest_attachment(conn, self.cfg, meta)
+                except Exception as e:
+                    log.warning(
+                        "upload_ingest_failed", attachment_id=meta.id, error=type(e).__name__,
+                    )
+        if stored or skipped:
+            lines = [f"{a.filename} \u00b7 {a.kind} \u00b7 {a.size}" for a in stored]
+            lines += [f"Skipped: {s}" for s in skipped or []]
+            await timeline.post(
+                conn, session.id, kind="attachments_received",
+                title="Attachments received", body="\n".join(lines),
+            )
+        return session
 
     async def _create_session(
         self,
@@ -708,6 +756,10 @@ class Supervisor:
 
 
 # ----------------------------- helpers ----------------------------- #
+
+
+def _is_atlas(conn: Conn) -> bool:
+    return isinstance(conn, AtlasConn)
 
 
 def _human_preference(session_id: str, text: str):

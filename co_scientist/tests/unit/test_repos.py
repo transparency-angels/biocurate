@@ -1146,6 +1146,15 @@ async def test_blob_roundtrip_large(any_conn):
     await blobs.delete(any_conn, "attachments", bid)
 
 
+async def test_blob_malformed_id_is_missing_not_an_error(any_conn):
+    from co_scientist.storage.repos import blobs
+
+    for bad in ("not-an-object-id", "", "zz" * 12):
+        with pytest.raises(KeyError):
+            await blobs.get(any_conn, "plots", bad)
+        await blobs.delete(any_conn, "plots", bad)  # no-op, like a missing id
+
+
 async def test_attachment_insert_dedupes_and_lists_in_order(any_conn):
     from co_scientist.storage.repos import attachments as repo
 

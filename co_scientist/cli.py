@@ -37,6 +37,8 @@ library_app = typer.Typer(
     help="Evidence library (Europe PMC full text on Atlas).", no_args_is_help=True
 )
 app.add_typer(library_app, name="library")
+attachments_app = typer.Typer(help="Uploaded attachment storage.", no_args_is_help=True)
+app.add_typer(attachments_app, name="attachments")
 
 console = Console()
 log = get_logger("cli")
@@ -437,6 +439,55 @@ def abort(ctx: typer.Context, session_id: str = typer.Argument(...)) -> None:
 
     asyncio.run(_do())
     console.print(f"[red]Aborted[/red] session={session_id}")
+
+
+@attachments_app.command("prune")
+def attachments_prune(
+    ctx: typer.Context,
+    older_than: int = typer.Option(
+        ..., "--older-than", min=0, help="Delete attachments uploaded more than DAYS ago."
+    ),
+    yes: bool = typer.Option(False, "--yes", help="Delete; without it, only list."),
+) -> None:
+    """Delete old uploaded attachments (file, metadata, library passages). Dry run by default."""
+    from datetime import timedelta
+
+    from .storage.atlas.client import AtlasConn
+    from .storage.repos import attachments as att_repo
+    from .storage.repos import blobs
+
+    cfg, _ = ctx.obj
+    cutoff = datetime.now(UTC) - timedelta(days=older_than)
+
+    async def _do() -> int:
+        conn = await db_mod.connect(cfg)
+        try:
+            old = await att_repo.older_than(conn, cutoff)
+            if not old:
+                console.print(f"No attachments older than {older_than} days.")
+                return 0
+            table = Table("id", "session", "file", "size", "uploaded")
+            for a in old:
+                table.add_row(a.id, a.session_id, a.filename, str(a.size),
+                              a.uploaded_at.isoformat(timespec="seconds"))
+            console.print(table)
+            if not yes:
+                console.print(f"Dry run: {len(old)} attachment(s) would be deleted. "
+                              "Re-run with --yes to delete.")
+                return 0
+            for a in old:
+                if isinstance(conn, AtlasConn) and a.kind == "document":
+                    from .storage.atlas import library as lib_store
+
+                    await lib_store.delete_paper(conn, f"UPLOAD{a.id[-12:]}")
+                await blobs.delete(conn, "attachments", a.blob_id)
+                await att_repo.delete(conn, a.id)
+            console.print(f"Deleted {len(old)} attachment(s).")
+            return len(old)
+        finally:
+            await conn.close()
+
+    asyncio.run(_do())
 
 
 @app.command()

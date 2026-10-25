@@ -31,3 +31,13 @@ async def test_upsert_passages_stores_client_embeddings(atlas_conn):
     )
     doc = await atlas_conn.coll("library").find_one({"_id": "PMC43#F1"})
     assert doc["embedding"] == [0.3, 0.4]
+
+
+async def test_journals_by_pmcid_returns_known_journals_only(atlas_conn):
+    await lib.upsert_passages(atlas_conn, PaperMeta("PMC50", "T", None, None, "Cell"),
+                              _passages("PMC50"))
+    await lib.upsert_passages(atlas_conn, PaperMeta("PMC51", "T", None, None, None),
+                              _passages("PMC51"))
+    got = await lib.journals_by_pmcid(atlas_conn, ["PMC50", "PMC51", "PMC52"])
+    assert got == {"PMC50": "Cell"}
+    assert await lib.journals_by_pmcid(atlas_conn, []) == {}

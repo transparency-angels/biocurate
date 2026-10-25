@@ -16,36 +16,71 @@ import asyncio
 import contextlib
 import json
 import logging as stdlib_logging
+import math
+import re
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pymongo.errors import PyMongoError
 from sse_starlette.sse import EventSourceResponse
 
 from .. import ids
+from ..attachments.intake import IntakeError, accept_uploads
+from ..attachments.store import AttachmentQuotaError
 from ..config import Config, load_config
 from ..logging import get_logger
 from ..models import SystemFeedback
 from ..orchestrator.events import GLOBAL_BUS
 from ..overview import DB_PREFIX, load_overview_markdown
 from ..storage import db as db_mod
+from ..storage.atlas.client import AtlasConn
+from ..storage.repos import analysis as analysis_repo
+from ..storage.repos import attachments as att_repo
+from ..storage.repos import blobs as blobs_repo
 from ..storage.repos import events as events_repo
 from ..storage.repos import feedback as fb_repo
 from ..storage.repos import hypotheses as hyp_repo
 from ..storage.repos import reviews as rev_repo
 from ..storage.repos import sessions as sess_repo
+from ..storage.repos import syntheses as syntheses_repo
+from ..storage.repos import timeline as timeline_repo
 from ..storage.repos import tournaments as tourney_repo
 from ..storage.repos import transcripts as tx_repo
+from ..timeline import to_payload
+from . import research_view
 from .sanitize import render_markdown
 
 log = get_logger("web")
 HERE = Path(__file__).parent
 TEMPLATES = Jinja2Templates(directory=HERE / "templates")
+# ids.session_id(): "ses_" + a 26-character Crockford base32 ULID.
+SESSION_ID_RE = re.compile(r"^ses_[0-9A-Z]{26}$")
+DB_UNAVAILABLE = "database unavailable"
+
+
+async def valid_session_id(session_id: str) -> str:
+    """Reject anything that is not a real session id before it reaches a query or a path."""
+    if not SESSION_ID_RE.fullmatch(session_id):
+        raise HTTPException(status_code=400, detail="invalid session id")
+    return session_id
 
 
 def create_app(cfg: Config | None = None) -> FastAPI:
@@ -53,6 +88,15 @@ def create_app(cfg: Config | None = None) -> FastAPI:
     app = FastAPI(title="AI Co-Scientist")
     app.state.cfg = cfg
     app.state.background_runs: dict[str, asyncio.Task] = {}
+    api = APIRouter(
+        prefix="/api/sessions/{session_id}", dependencies=[Depends(valid_session_id)]
+    )
+
+    @app.exception_handler(PyMongoError)
+    async def _db_unavailable(request: Request, exc: PyMongoError) -> JSONResponse:
+        # Never echo the PyMongo message: it can carry hosts, queries and credentials.
+        log.warning("db_error", path=request.url.path, err_type=type(exc).__name__)
+        return JSONResponse({"detail": DB_UNAVAILABLE}, status_code=503)
 
     # Static
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
@@ -217,7 +261,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
 
     # ----------------------------- API + SSE ----------------------------- #
 
-    @app.get("/api/sessions/{session_id}/metrics")
+    @api.get("/metrics")
     async def api_metrics(session_id: str) -> JSONResponse:
         from ..obs.metrics import session_metrics_cached, to_dict
 
@@ -228,7 +272,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         finally:
             await conn.close()
 
-    @app.get("/api/sessions/{session_id}")
+    @api.get("")
     async def api_session(session_id: str) -> JSONResponse:
         conn = await db_mod.connect(cfg)
         try:
@@ -239,54 +283,125 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         finally:
             await conn.close()
 
-    @app.get("/api/sessions/{session_id}/overview")
+    async def _synthesis_doc(session_id: str) -> dict[str, Any] | None:
+        conn = await db_mod.connect(cfg)
+        try:
+            doc = await syntheses_repo.fetch(conn, session_id)
+        finally:
+            await conn.close()
+        return doc if doc is not None else _legacy_synthesis(cfg, session_id)
+
+    @api.get("/overview")
     async def api_overview(session_id: str) -> JSONResponse:
-        root = (cfg.data_dir / "artifacts" / session_id).resolve()
-        for candidate in [root / "final" / "synthesis.json", root / "synthesis.json"]:
-            if candidate.is_file():
-                try:
-                    data = json.loads(candidate.read_text(encoding="utf-8"))
-                    return JSONResponse(data.get("overview", data))
-                except Exception as e:
-                    raise HTTPException(status_code=500, detail=str(e)) from e
-        for candidate in [root / "final" / "overview.json", root / "overview.json"]:
-            if candidate.is_file():
-                try:
-                    return JSONResponse(json.loads(candidate.read_text(encoding="utf-8")))
-                except Exception as e:
-                    raise HTTPException(status_code=500, detail=str(e)) from e
-        raise HTTPException(status_code=404, detail="overview not found")
+        doc = await _synthesis_doc(session_id)
+        if doc is None:
+            legacy = _legacy_json(cfg, session_id, "overview.json")
+            if legacy is None:
+                raise HTTPException(status_code=404, detail="overview not found")
+            return JSONResponse(legacy)
+        return JSONResponse(doc.get("overview", doc))
 
-    @app.get("/api/sessions/{session_id}/synthesis")
+    @api.get("/synthesis")
     async def api_synthesis(session_id: str) -> JSONResponse:
-        root = (cfg.data_dir / "artifacts" / session_id).resolve()
-        for candidate in [root / "final" / "synthesis.json", root / "synthesis.json"]:
-            if candidate.is_file():
-                try:
-                    return JSONResponse(json.loads(candidate.read_text(encoding="utf-8")))
-                except Exception as e:
-                    raise HTTPException(status_code=500, detail=str(e)) from e
-        raise HTTPException(status_code=404, detail="synthesis not found")
+        doc = await _synthesis_doc(session_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail="synthesis not found")
+        return JSONResponse(doc)
 
-    @app.get("/api/sessions/{session_id}/sources")
+    @api.get("/sources")
     async def api_sources(session_id: str) -> JSONResponse:
-        root = (cfg.data_dir / "artifacts" / session_id).resolve()
-        for candidate in [root / "final" / "synthesis.json", root / "synthesis.json"]:
-            if candidate.is_file():
-                try:
-                    data = json.loads(candidate.read_text(encoding="utf-8"))
-                    return JSONResponse(data.get("sources", data))
-                except Exception as e:
-                    raise HTTPException(status_code=500, detail=str(e)) from e
-        for candidate in [root / "final" / "sources.json", root / "sources.json"]:
-            if candidate.is_file():
-                try:
-                    return JSONResponse(json.loads(candidate.read_text(encoding="utf-8")))
-                except Exception as e:
-                    raise HTTPException(status_code=500, detail=str(e)) from e
-        raise HTTPException(status_code=404, detail="sources not found")
+        doc = await _synthesis_doc(session_id)
+        if doc is None:
+            legacy = _legacy_json(cfg, session_id, "sources.json")
+            if legacy is None:
+                raise HTTPException(status_code=404, detail="sources not found")
+            return JSONResponse(legacy)
+        return JSONResponse(doc.get("sources", doc))
 
-    @app.get("/api/sessions/{session_id}/events")
+    @api.get("/timeline")
+    async def api_timeline(session_id: str, after_seq: int = Query(0, ge=0)) -> JSONResponse:
+        conn = await db_mod.connect(cfg)
+        try:
+            msgs = await timeline_repo.list_for_session(conn, session_id, after_seq=after_seq)
+        finally:
+            await conn.close()
+        return JSONResponse({"messages": [to_payload(m) for m in msgs]})
+
+    @api.get("/research")
+    async def api_research(session_id: str) -> JSONResponse:
+        conn = await db_mod.connect(cfg)
+        try:
+            if await sess_repo.fetch(conn, session_id) is None:
+                raise HTTPException(status_code=404, detail="session not found")
+            shown = research_view.select_hypotheses(
+                await hyp_repo.list_for_session(conn, session_id)
+            )
+            keys = research_view.linked_candidate_keys(shown)
+            points = await analysis_repo.fetch_points(conn, session_id, keys) if keys else {}
+            report = await analysis_repo.fetch_report(conn, session_id) if keys else None
+            atts = {
+                a.id: (a.filename, a.kind)
+                for a in await att_repo.list_for_session(conn, session_id)
+            }
+            journals = await _library_journals(conn, shown)
+        finally:
+            await conn.close()
+        return JSONResponse(research_view.to_research_session(
+            session_id, shown, report, points, journals=journals, attachments=atts,
+        ))
+
+    @api.get("/analysis")
+    async def api_analysis(session_id: str) -> JSONResponse:
+        conn = await db_mod.connect(cfg)
+        try:
+            report = await analysis_repo.fetch_report(conn, session_id)
+        finally:
+            await conn.close()
+        if report is None:
+            raise HTTPException(status_code=404, detail="analysis not found")
+        report["plots"] = [
+            {
+                **{k: v for k, v in p.items() if k != "blob_id"},
+                "url": f"/api/sessions/{session_id}/plots/{p.get('name', '')}",
+            }
+            for p in report.get("plots", [])
+        ]
+        return JSONResponse(jsonable_encoder(report))
+
+    @api.get("/plots/{name}")
+    async def api_plot(session_id: str, name: str) -> Response:
+        conn = await db_mod.connect(cfg)
+        try:
+            report = await analysis_repo.fetch_report(conn, session_id)
+            plot = next(
+                (p for p in (report or {}).get("plots", []) if p.get("name") == name), None
+            )
+            if plot is None or not plot.get("blob_id"):
+                raise HTTPException(status_code=404, detail="plot not found")
+            try:
+                data = await blobs_repo.get(conn, "plots", plot["blob_id"])
+            except KeyError as e:
+                raise HTTPException(status_code=404, detail="plot not found") from e
+        finally:
+            await conn.close()
+        return Response(content=data, media_type="image/png")
+
+    @api.get("/attachments")
+    async def api_attachments(session_id: str) -> JSONResponse:
+        conn = await db_mod.connect(cfg)
+        try:
+            if await sess_repo.fetch(conn, session_id) is None:
+                raise HTTPException(status_code=404, detail="session not found")
+            metas = await att_repo.list_for_session(conn, session_id)
+        finally:
+            await conn.close()
+        return JSONResponse({"attachments": [
+            {"id": a.id, "filename": a.filename, "kind": a.kind, "size": a.size,
+             "status": a.status}
+            for a in metas
+        ]})
+
+    @api.get("/events")
     async def api_events(session_id: str) -> EventSourceResponse:
         async def _stream() -> AsyncIterator[dict[str, Any]]:
             # Replay last 25 events from DB so refreshes don't go blank.
@@ -309,7 +424,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
 
         return EventSourceResponse(_stream())
 
-    @app.post("/api/sessions/{session_id}/pause")
+    @api.post("/pause")
     async def api_pause(session_id: str) -> JSONResponse:
         conn = await db_mod.connect(cfg)
         try:
@@ -319,7 +434,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         finally:
             await conn.close()
 
-    @app.post("/api/sessions/{session_id}/resume")
+    @api.post("/resume")
     async def api_resume(session_id: str) -> JSONResponse:
         conn = await db_mod.connect(cfg)
         try:
@@ -329,7 +444,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         finally:
             await conn.close()
 
-    @app.post("/api/sessions/{session_id}/abort")
+    @api.post("/abort")
     async def api_abort(session_id: str) -> JSONResponse:
         conn = await db_mod.connect(cfg)
         try:
@@ -339,7 +454,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         finally:
             await conn.close()
 
-    @app.post("/api/sessions/{session_id}/feedback")
+    @api.post("/feedback")
     async def api_feedback(
         session_id: str,
         text: str = Form(...),
@@ -366,6 +481,61 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         finally:
             await conn.close()
 
+    @app.post("/api/sessions", status_code=201)
+    async def api_create_session(
+        question: str = Form(...),
+        files: Annotated[list[UploadFile] | None, File()] = None,
+        budget_usd: float | None = Form(None),
+    ) -> JSONResponse:
+        from ..agents.supervisor import Supervisor
+
+        goal = question.strip()
+        if not goal:
+            raise HTTPException(status_code=400, detail="question is required")
+        if budget_usd is not None and not (math.isfinite(budget_usd) and budget_usd > 0):
+            raise HTTPException(status_code=400, detail="budget_usd must be a positive number")
+        limits = cfg.attachments
+        uploads = list(files or [])
+        if len(uploads) > limits.max_files:
+            raise HTTPException(
+                status_code=400, detail=f"at most {limits.max_files} files may be attached"
+            )
+        cap = limits.max_file_mb * 1024 * 1024
+        # Read one byte past the cap so an oversize file is rejected without buffering it all.
+        raw = [(u.filename or "", await u.read(cap + 1), u.content_type or "") for u in uploads]
+        try:
+            intake = accept_uploads(raw, limits)
+        except IntakeError as e:
+            raise HTTPException(status_code=e.status_code, detail=str(e)) from e
+
+        # A fresh Config copy per session so per-session knobs don't leak.
+        sup_cfg = cfg.model_copy(deep=True)
+        if budget_usd is not None:
+            sup_cfg.run.budget_usd = budget_usd
+        sup = Supervisor(sup_cfg)
+        conn = await db_mod.connect(sup_cfg)
+        try:
+            session = await sup.prepare_session(
+                conn, goal, attachments=intake.files, skipped=intake.skipped,
+            )
+        except AttachmentQuotaError as e:
+            raise HTTPException(status_code=413, detail=str(e)) from e
+        finally:
+            await conn.close()
+
+        async def _run() -> None:
+            try:
+                await sup.run_session(goal=goal, session_id=session.id)
+            except Exception:
+                log.exception("background_run_failed", session_id=session.id)
+            finally:
+                app.state.background_runs.pop(session.id, None)
+
+        app.state.background_runs[session.id] = asyncio.create_task(_run())
+        return JSONResponse({"session_id": session.id}, status_code=201)
+
+    app.include_router(api)
+
     @app.get("/healthz")
     async def health() -> JSONResponse:
         return JSONResponse({"ok": True})
@@ -376,6 +546,41 @@ def create_app(cfg: Config | None = None) -> FastAPI:
 
 
 # ----------------------------- helpers ----------------------------- #
+
+
+def _legacy_json(cfg: Config, session_id: str, name: str) -> dict[str, Any] | None:
+    """Read `<name>` from a pre-database session's artifact folder, if present.
+
+    `session_id` is already validated against SESSION_ID_RE, so the path stays inside
+    `data_dir/artifacts`.
+    """
+    root = cfg.data_dir / "artifacts" / session_id
+    for candidate in (root / "final" / name, root / name):
+        if candidate.is_file():
+            try:
+                data = json.loads(candidate.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as e:
+                log.warning("legacy_json_unreadable", session=session_id, err_type=type(e).__name__)
+                raise HTTPException(status_code=500, detail="stored file is unreadable") from e
+            return data if isinstance(data, dict) else {"data": data}
+    return None
+
+
+def _legacy_synthesis(cfg: Config, session_id: str) -> dict[str, Any] | None:
+    return _legacy_json(cfg, session_id, "synthesis.json")
+
+
+async def _library_journals(conn: Any, hypotheses: list[Any]) -> dict[str, str]:
+    """Journal names for cited library papers. The library lives on Atlas only."""
+    if not isinstance(conn, AtlasConn):
+        return {}
+    from ..storage.atlas import library as lib_store
+
+    pmcids = {
+        p for h in hypotheses for c in h.citations
+        if (p := research_view.library_pmcid(c.url))
+    }
+    return await lib_store.journals_by_pmcid(conn, sorted(pmcids)) if pmcids else {}
 
 
 async def _list_sessions(cfg: Config, *, limit: int = 50) -> list[dict[str, Any]]:

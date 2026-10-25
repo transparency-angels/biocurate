@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 
 from bson import ObjectId
+from bson.errors import InvalidId
 from gridfs import AsyncGridFSBucket
 from gridfs.errors import NoFile
 
@@ -21,14 +22,28 @@ async def put(conn: AtlasConn, bucket: str, name: str, data: bytes, metadata: di
     return str(oid)
 
 
-async def get(conn: AtlasConn, bucket: str, blob_id: str) -> bytes:
+def _oid(blob_id: str) -> ObjectId | None:
+    """Parse a blob id; a malformed one is treated as missing, as on SQLite."""
     try:
-        stream = await _bucket(conn, bucket).open_download_stream(ObjectId(blob_id))
+        return ObjectId(blob_id)
+    except (InvalidId, TypeError):
+        return None
+
+
+async def get(conn: AtlasConn, bucket: str, blob_id: str) -> bytes:
+    oid = _oid(blob_id)
+    if oid is None:
+        raise KeyError(f"blob {blob_id!r} not found in bucket {bucket!r}")
+    try:
+        stream = await _bucket(conn, bucket).open_download_stream(oid)
     except NoFile as e:
         raise KeyError(f"blob {blob_id!r} not found in bucket {bucket!r}") from e
     return await stream.read()
 
 
 async def delete(conn: AtlasConn, bucket: str, blob_id: str) -> None:
+    oid = _oid(blob_id)
+    if oid is None:
+        return
     with contextlib.suppress(NoFile):
-        await _bucket(conn, bucket).delete(ObjectId(blob_id))
+        await _bucket(conn, bucket).delete(oid)
