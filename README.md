@@ -45,7 +45,7 @@ matches. Meta-review synthesises the whole session into a research overview.
 
 What comes out is not a chat answer. It is a ranked leaderboard with the
 reviews, the debate rationales, the citations and the full provenance behind
-each entry, all in a local SQLite database you can query, or in MongoDB Atlas (see [Built on MongoDB Atlas](#built-on-mongodb-atlas)).
+each entry, all in MongoDB Atlas by default (or a local SQLite database; see [Built on MongoDB Atlas](#built-on-mongodb-atlas)).
 
 ## Why this one
 
@@ -58,13 +58,13 @@ each entry, all in a local SQLite database you can query, or in MongoDB Atlas (s
 | **Citations you can check** | An agent may only cite a URL it actually fetched. Every evidence row carries a URL and an excerpt, and a verifier enforces both. |
 | **Driveable by coding agents** | [`plugin/`](plugin/) is an Agent Plugins 1.0 package: one MCP server and seven skills that work in Claude Code, Codex CLI, Cursor, VS Code, Copilot and Kiro. |
 | **Measured, not asserted** | `co-scientist bench` settles N models on one goal in a shared Elo tournament with gold-set recall scoring. Every run ever done is in [`docs/BENCH_RESULTS.md`](docs/BENCH_RESULTS.md). |
-| **Tested** | ~550 offline tests, plus the same repo contract tests against Atlas when `CO_SCI_ATLAS_TESTS=1`. On the default `sqlite` backend the suite needs no key, no network and no subscription quota. |
+| **Tested** | ~550 offline tests, plus the same repo contract tests against Atlas when `CO_SCI_ATLAS_TESTS=1`. The offline test suite uses SQLite and needs no key, network or subscription quota. |
 
 ## Built on MongoDB Atlas
 
-Set `[storage] backend = "atlas"` and the whole system (sessions, hypotheses, the
+The whole system (sessions, hypotheses, the
 task queue, the Elo tournament, events, the evidence library) runs on a MongoDB
-Atlas cluster instead of local SQLite. SQLite stays the default.
+Atlas cluster. Atlas is the runtime default; SQLite remains available for local/offline use by setting `[storage] backend = "sqlite"`.
 
 | Atlas / Voyage feature | What it does in biocurate | Code |
 | --- | --- | --- |
@@ -118,11 +118,10 @@ flowchart LR
 
 ### How to run on Atlas
 
-1. In `.env` (copied from [`.env.example`](.env.example)) set `MONGODB_URI` and `VOYAGE_API_KEY`. The cluster must support Atlas Search and Vector Search; `$rankFusion` needs MongoDB 8.0+.
-2. In your config TOML set:
+1. Copy [`.env.example`](.env.example) to `.env` and set `MONGODB_URI` to your Atlas connection string. Set `VOYAGE_API_KEY` for semantic embeddings. The cluster must support Atlas Search and Vector Search; `$rankFusion` needs MongoDB 8.0+.
+2. Atlas is selected by default. To override the database name, add this to your config TOML:
    ```toml
    [storage]
-   backend = "atlas"
    atlas_db = "biocurate"
    ```
 3. `co-scientist init` connects, creates the B-tree indexes and the three search indexes (`library_text`, `library_vec`, `hyp_vec`) if missing.
@@ -153,6 +152,10 @@ cd Co-Scientist
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
+# Atlas is the default database. Set its connection string before initializing:
+cp .env.example .env
+# edit .env and set MONGODB_URI (and VOYAGE_API_KEY for semantic embeddings)
+
 # Pick one backend.
 export OPENROUTER_API_KEY=...   # one key, 200+ models
 # ...or run on a subscription you already pay for, with no key at all:
@@ -168,7 +171,7 @@ co-scientist report <session-id>    # the final research overview
 co-scientist serve                  # live dashboard at localhost:7878
 ```
 
-`doctor` costs nothing and tells you exactly what is missing. Run it first.
+`doctor` costs nothing and tells you exactly what is missing. Run it first. Existing `~/.co-scientist/config.toml` or `./co-scientist.toml` files override repository defaults; remove any `backend = "sqlite"` setting there to use Atlas.
 
 Full detail: [Install](#install) · [LLM backend](#llm-backend) ·
 [Run a research session](#run-a-research-session)

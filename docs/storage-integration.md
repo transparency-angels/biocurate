@@ -65,14 +65,14 @@ TOML passed with the global `--config/-c` option
 
 ```toml
 [storage]
-backend = "atlas"          # default "sqlite"
+backend = "atlas"          # runtime default; use "sqlite" for offline/local runs
 atlas_db = "biocurate"     # the DB user only has readWrite here
 atlas_prefix = ""          # collection-name prefix; tests set a unique one
 ```
 
 `.env` needs `MONGODB_URI` (`mongodb+srv://<user>:<password>@<cluster>/`) and
-`VOYAGE_API_KEY`. The default stays `sqlite` so CI and the offline tests need
-no network.
+`VOYAGE_API_KEY`. CI and offline unit tests use SQLite fixtures and need no
+network; Atlas tests opt in with `CO_SCI_ATLAS_TESTS=1`.
 
 **The Atlas client.** It is `pymongo.AsyncMongoClient` (not Motor), created
 with `tz_aware=True` and `tlsCAFile=certifi.where()`; the Mac dev machine
@@ -402,7 +402,7 @@ Line-level citation came in with the `feature/cite-lines` work (PR #1). The piec
 - [ ] Run `CO_SCI_ATLAS_TESTS=1 uv run pytest -q` once, against Atlas.
 - [ ] Run `co-scientist -c <atlas overlay> init` on the real cluster after
       merging. It creates any new indexes.
-- [ ] Don't commit a `backend = "atlas"` change to `config/default.toml`; use an overlay.
+- [ ] Keep the shipped runtime default on Atlas; use a local config overlay to select SQLite when needed.
 
 ## 10. Live verification (2026-10-24)
 
