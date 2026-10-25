@@ -9,6 +9,7 @@ from typing import Any
 
 from .. import timeline
 from ..analysis import DatasetNotFoundError, profile_dataset
+from ..generic_analysis import profile_generic_dataset
 from ..logging import get_logger
 from ..models import Task, TaskResult
 from ..storage.repos import analysis as analysis_repo
@@ -20,7 +21,7 @@ from .base import BaseAgent
 
 log = get_logger("data_analysis")
 
-FAILED_TEXT = "could not be analysed as a clinical dataset"
+FAILED_TEXT = "could not be analysed; inspect the table format and processing logs"
 # The full test list is stored whole unless it could crowd a 16 MB document.
 MAX_TESTS_BYTES = 8 * 1024 * 1024
 TOP_TESTS_KEPT = 500
@@ -84,17 +85,12 @@ class DataAnalysisAgent(BaseAgent):
     ) -> dict[str, Any] | TaskResult:
         try:
             return profile_dataset(data_dir, goal=session.research_goal, target_drugs=drugs)
-        except DatasetNotFoundError as exc:
-            # A requested dataset may not contain a compatible clinical table.
-            for att_id in attachment_ids:
-                await att_repo.set_status(self.deps.db, att_id, "failed", FAILED_TEXT)
-            await timeline.post(
-                self.deps.db, session.id, kind="dataset_unusable",
-                title="Dataset could not be analysed",
-                body="No compatible clinical table was found in the selected files.",
-                agent=self.name,
-            )
-            return TaskResult(kind="data_profiled", extra={"candidates": [], "summary": str(exc)})
+        except (DatasetNotFoundError, ValueError) as exc:
+            # Survival profiling is schema-specific. For other delimited uploads,
+            # provide general descriptive statistics, group comparisons and
+            # correlations instead of silently returning no report.
+            log.info("using_generic_dataset_profile", session_id=session.id, reason=str(exc))
+            return profile_generic_dataset(data_dir)
         except Exception:
             for att_id in attachment_ids:
                 await att_repo.set_status(self.deps.db, att_id, "failed", FAILED_TEXT)
@@ -137,10 +133,12 @@ class DataAnalysisAgent(BaseAgent):
             await att_repo.set_status(db, att_id, "analysed")
         await timeline.post(
             db, session_id, kind="dataset_profiled", title="Dataset profiled",
-            body=(
-                f"{report['sample_count']} samples · drugs: {', '.join(report['drugs'])}"
-                f" · {len(report['candidates'])} candidate biomarkers"
-            ),
+            body=(f"Exploratory profile · {report['sample_count']} rows · "
+                  f"{len(report.get('tables', []))} tables · "
+                  f"{report.get('group_comparisons_total', len(report.get('group_comparisons', [])))} group comparisons"
+                  if report.get("profile_type") == "exploratory_tabular" else
+                  f"{report['sample_count']} samples · drugs: {', '.join(report['drugs'])}"
+                  f" · {len(report['candidates'])} candidate biomarkers"),
             agent=self.name,
         )
         log.info(

@@ -89,6 +89,8 @@ def _description(ev: Mapping[str, Any]) -> str:
         stats.append(f"Δ median OS {_fmt(ev['delta_os_months'])} months")
     if ev.get("p_value") is not None:
         stats.append(f"p = {_fmt(ev['p_value'])}")
+    if ev.get("q_value") is not None:
+        stats.append(f"FDR q = {_fmt(ev['q_value'])}")
     if ev.get("sample_size") is not None:
         stats.append(f"n = {ev['sample_size']}")
     return f"{text} ({', '.join(stats)})" if stats else text
@@ -99,9 +101,12 @@ def _data(
     points_by_key: Mapping[str, Mapping[str, Any]],
 ) -> tuple[dict[str, str], list[dict[str, Any]]]:
     key = candidate_key(h)
-    if key is None:
+    # Only display empirical values when the key matches a candidate actually
+    # computed by this session's dataset analysis. Model-authored statistics are
+    # claims, not measurements, and must not be presented as analysed results.
+    if key is None or key not in candidates:
         return {"description": "", "metric": "", "unit": ""}, []
-    ev = {**candidates.get(key, {}), **(h.data_evidence or {})}
+    ev = candidates[key]
     doc = points_by_key.get(key) or {}
     summary = {
         "description": _description(ev),

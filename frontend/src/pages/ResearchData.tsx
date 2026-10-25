@@ -56,14 +56,14 @@ export function ResearchData() {
       {loading ? <p className="mt-8 text-sm text-muted-foreground">Loading dataset analysis…</p> : !analysis ? (
         <section className="mt-6 rounded-xl border border-border bg-card px-5 py-6 sm:px-6">
           <h2 className="text-sm font-semibold text-foreground">No dataset analysis available</h2>
-          <p className="mt-1.5 max-w-[68ch] text-sm leading-6 text-muted-foreground">This session has no completed analysis from tabular data. Attach a CSV or TXT dataset when starting a research session to enable biomarker and survival analysis.</p>
+          <p className="mt-1.5 max-w-[68ch] text-sm leading-6 text-muted-foreground">{sessionStatus === 'running' || sessionStatus === 'paused' ? 'Dataset profiling is still in progress. This page refreshes automatically when the report is ready.' : 'No analysis report was saved for this session. Check the attached file statuses above; supported CSV, TSV, and delimited TXT tables are analysed automatically when the research starts.'}</p>
         </section>
       ) : (
         <div className="mt-6 space-y-6">
           <section className="rounded-xl border border-border bg-card px-5 py-5 sm:px-6">
             <div className="flex flex-wrap gap-x-8 gap-y-2 text-sm">
-              {analysis.sample_count !== undefined && <p><span className="text-muted-foreground">Samples</span><span className="ml-2 font-medium tabular-nums text-foreground">{analysis.sample_count}</span></p>}
-              {analysis.candidates && <p><span className="text-muted-foreground">Comparisons</span><span className="ml-2 font-medium tabular-nums text-foreground">{analysis.candidates.length}</span></p>}
+              {analysis.sample_count !== undefined && <p><span className="text-muted-foreground">{analysis.profile_type === 'exploratory_tabular' ? 'Rows profiled' : 'Samples'}</span><span className="ml-2 font-medium tabular-nums text-foreground">{analysis.sample_count}</span></p>}
+              {(analysis.group_comparisons || analysis.candidates) && <p><span className="text-muted-foreground">{analysis.profile_type === 'exploratory_tabular' ? 'Group comparisons' : 'Candidate associations'}</span><span className="ml-2 font-medium tabular-nums text-foreground">{analysis.profile_type === 'exploratory_tabular' ? analysis.group_comparisons_total ?? analysis.selection?.group_comparisons ?? analysis.group_comparisons?.length ?? 0 : analysis.candidates?.length ?? 0}</span></p>}
               {analysis.generated_at && <p><span className="text-muted-foreground">Completed</span><time className="ml-2 text-foreground" dateTime={analysis.generated_at}>{new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(analysis.generated_at))}</time></p>}
             </div>
           </section>

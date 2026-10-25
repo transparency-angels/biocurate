@@ -131,16 +131,16 @@ async def test_plan_selects_only_known_tabular_ids(
         await conn.close()
 
 
-async def test_parse_goal_failure_defaults_to_no_dataset(
+async def test_parse_goal_failure_uses_structured_upload_inventory(
     tmp_cfg, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # No tool_use record, and a goal full of the old trigger keywords.
+    # No tool_use record: structured user uploads still receive the data profile.
     sup, _llm, seen = _wire(monkeypatch, tmp_cfg, None)
     await sup.run_session(
         "Analyse the attached dataset of patient metadata", n_initial=2,
         attachments=[_tab("clinical.csv", _csv(5))],
     )
-    assert [t.action for t in seen] == ["CreateInitialHypotheses"] * 2
+    assert [t.action for t in seen] == ["ProfileDataset"]
 
 
 async def test_session_over_quota_stores_nothing(tmp_cfg, conn) -> None:

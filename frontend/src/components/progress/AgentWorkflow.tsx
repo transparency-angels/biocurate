@@ -6,6 +6,7 @@ import { AgentStatusCard } from './AgentStatusCard'
 export function AgentWorkflow({ progress }: { progress: ResearchProgress }) {
   const headingId = useId()
   const { completedTasks, failedTasks, unattributedResults } = progress
+  const sessionEnded = ['completed', 'failed', 'aborted'].includes(progress.phase)
 
   return (
     <section aria-labelledby={headingId} className="min-w-0 rounded-xl border border-border bg-card">
@@ -24,7 +25,7 @@ export function AgentWorkflow({ progress }: { progress: ResearchProgress }) {
 
       <ul className="divide-y divide-border border-t border-border">
         {progress.agents.map((agent) => (
-          <AgentStatusCard key={agent.name} agent={agent} />
+          <AgentStatusCard key={agent.name} agent={agent} sessionEnded={sessionEnded} />
         ))}
       </ul>
 

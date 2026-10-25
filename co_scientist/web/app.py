@@ -692,6 +692,9 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         question: str = Form(...),
         files: Annotated[list[UploadFile] | None, File()] = None,
         budget_usd: float | None = Form(None),
+        budget_tokens: int | None = Form(None),
+        wall_clock_seconds: int | None = Form(None),
+        n_initial: int | None = Form(None),
     ) -> JSONResponse:
         from ..agents.supervisor import Supervisor
 
@@ -700,6 +703,12 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail="question is required")
         if budget_usd is not None and not (math.isfinite(budget_usd) and budget_usd > 0):
             raise HTTPException(status_code=400, detail="budget_usd must be a positive number")
+        if budget_tokens is not None and budget_tokens <= 0:
+            raise HTTPException(status_code=400, detail="budget_tokens must be a positive integer")
+        if wall_clock_seconds is not None and not 60 <= wall_clock_seconds <= 604800:
+            raise HTTPException(status_code=400, detail="wall_clock_seconds must be between 60 and 604800")
+        if n_initial is not None and not 1 <= n_initial <= 10:
+            raise HTTPException(status_code=400, detail="n_initial must be between 1 and 10")
         limits = cfg.attachments
         uploads = list(files or [])
         if len(uploads) > limits.max_files:
@@ -718,11 +727,17 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         sup_cfg = cfg.model_copy(deep=True)
         if budget_usd is not None:
             sup_cfg.run.budget_usd = budget_usd
+        if budget_tokens is not None:
+            sup_cfg.run.budget_tokens = budget_tokens
+        if wall_clock_seconds is not None:
+            sup_cfg.run.wall_clock_seconds = wall_clock_seconds
+        initial_hypotheses = n_initial if n_initial is not None else 3
         sup = Supervisor(sup_cfg)
         conn = await db_mod.connect(sup_cfg)
         try:
             session = await sup.prepare_session(
-                conn, goal, attachments=intake.files, skipped=intake.skipped,
+                conn, goal, wall_clock_seconds=wall_clock_seconds,
+                attachments=intake.files, skipped=intake.skipped,
             )
         except AttachmentQuotaError as e:
             raise HTTPException(status_code=413, detail=str(e)) from e
@@ -731,7 +746,10 @@ def create_app(cfg: Config | None = None) -> FastAPI:
 
         async def _run() -> None:
             try:
-                await sup.run_session(goal=goal, session_id=session.id)
+                await sup.run_session(
+                    goal=goal, session_id=session.id, n_initial=initial_hypotheses,
+                    wall_clock_seconds=wall_clock_seconds,
+                )
             except PyMongoError as e:
                 # The PyMongo message (and traceback) can name hosts; log the type only.
                 log.error(

@@ -333,7 +333,8 @@ def _render_hypothesis_md(record: dict[str, Any]) -> str:
             f"- **Biomarker:** {de.get('biomarker', 'N/A')} ({de.get('alteration_type', 'alteration')})\n"
             f"- **Treatment:** {de.get('drug', 'N/A')}\n"
             f"- **Observed Effect:** {de.get('relationship', 'associated')} "
-            f"({effect_label}: {effect}, {p_label} = {de.get('p_value', 'N/A')})\n"
+            f"({effect_label}: {effect}, {p_label} = {de.get('p_value', 'N/A')}, "
+            f"FDR q = {de.get('q_value', 'N/A')})\n"
             f"- **Cohort Sample Support:** {de.get('altered_samples', 'N/A')} altered / {de.get('sample_size', 'N/A')} total"
         )
     if record.get("mechanism"):

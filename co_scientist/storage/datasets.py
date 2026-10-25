@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 from pathlib import Path
 
 TABULAR_SUFFIXES = (".csv", ".tsv", ".txt")
@@ -25,5 +26,15 @@ def tabular_files(data_dir: Path) -> list[Path]:
 
 
 def table_delimiter(path: Path) -> str:
-    """CSV uses commas; legacy TSV and TXT tables use tabs."""
-    return "," if path.suffix.lower() == ".csv" else "\t"
+    """Detect common delimited text formats; CSV/TSV extensions remain explicit."""
+    suffix = path.suffix.lower()
+    if suffix == ".csv":
+        return ","
+    if suffix == ".tsv":
+        return "\t"
+    try:
+        with path.open(encoding="utf-8-sig", errors="replace", newline="") as stream:
+            sample = stream.read(8192)
+        return csv.Sniffer().sniff(sample, delimiters="\t,;").delimiter
+    except (OSError, csv.Error):
+        return "\t"

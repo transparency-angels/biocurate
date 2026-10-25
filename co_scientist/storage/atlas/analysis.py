@@ -12,7 +12,8 @@ _POINTS = "analysis_points"
 
 REPORT_FIELDS = (
     "summary_markdown", "tests", "methods", "candidates", "selection",
-    "sample_count", "drugs", "plots",
+    "sample_count", "drugs", "plots", "generated_at", "profile_type", "tables",
+    "group_comparisons", "group_comparisons_total", "correlations", "join_audit", "screening",
 )
 
 

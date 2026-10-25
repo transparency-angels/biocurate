@@ -354,7 +354,15 @@ Remove old uploads with `co-scientist attachments prune --older-than DAYS [--yes
 See [docs/storage-integration.md](docs/storage-integration.md) and
 [docs/frontend-api.md](docs/frontend-api.md).
 
-The biomarker profiler expects a clinical table such as `patient_metadata.csv`
+For any delimited scientific table, the session report includes column summaries,
+missingness and duplicate-row checks, robust non-parametric group comparisons,
+rank correlations, effect sizes, and Benjamini–Hochberg q-values where the data
+supports them. Files with sample or patient identifiers are also joined across
+the upload on unique IDs, so separate metadata and measurement matrices can be
+analysed together. These general analyses are exploratory and do not establish
+causality or adjust for study covariates.
+
+For survival-specific biomarker screening, the profiler expects a clinical table such as `patient_metadata.csv`
 or `metadata.csv`; other filenames are recognized by their headers. Include
 `SAMPLE_ID` (also `PATIENT_ID`, `sample`, or `id`), `DRUG` or `TREATMENT`, and
 `OS_MONTHS` (also `PFS_MONTHS`, `survival_months`, or `time`). A matching event/censor

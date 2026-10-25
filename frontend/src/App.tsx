@@ -17,12 +17,12 @@ function HomeRoute() {
   const location = useLocation()
   const fresh = (location.state as HomeLocationState | null)?.fresh
 
-  const submitResearch: SubmitResearch = async ({ question, files }) => {
+  const submitResearch: SubmitResearch = async ({ question, files, settings }) => {
     const trimmed = question.trim()
     if (!trimmed) return
-    const sessionId = await createResearchSession(trimmed, files)
+    const sessionId = await createResearchSession(trimmed, files, settings)
     rememberCurrentSession({ id: sessionId, savedAt: Date.now() })
-    navigate(`/research/${sessionId}/chat`)
+    navigate(`/research/${sessionId}/progress`)
   }
 
   return <HomePage key={fresh ?? 'home'} onSubmitResearch={submitResearch} />

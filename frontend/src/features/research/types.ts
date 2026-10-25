@@ -1,6 +1,14 @@
 export interface ResearchSubmission {
   question: string
   files: File[]
+  settings: ResearchRunSettings
+}
+
+export interface ResearchRunSettings {
+  budgetUsd: number
+  budgetTokens: number
+  wallClockMinutes: number
+  initialHypotheses: number
 }
 
 /**

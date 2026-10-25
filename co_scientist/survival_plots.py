@@ -46,7 +46,7 @@ def survival_plot_images(report: dict[str, Any]) -> dict[str, bytes]:
         )
         axes.set_title(axes.get_title(), fontsize=15, fontweight="bold", pad=30)
         axes.text(0.5, 1.025,
-                  f"Log-rank p = {candidate['p_value']:.3e}   |   χ² = {candidate['logrank_statistic']:.3f}   |   95% confidence bands; + censored",
+                  f"Log-rank p = {candidate['p_value']:.3e}   |   FDR q = {candidate['q_value']:.3e}   |   χ² = {candidate['logrank_statistic']:.3f}   |   95% confidence bands; + censored",
                   transform=axes.transAxes, ha="center", fontsize=10)
         axes.grid(alpha=0.2)
         axes.spines[["top", "right"]].set_visible(False)

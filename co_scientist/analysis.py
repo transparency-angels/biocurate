@@ -15,7 +15,7 @@ from typing import Any
 
 import lifelines
 import numpy as np
-from lifelines import KaplanMeierFitter
+from lifelines import CoxPHFitter, KaplanMeierFitter
 from lifelines.statistics import logrank_test
 
 from .storage.datasets import TABULAR_SUFFIXES, table_delimiter, tabular_files
@@ -37,6 +37,19 @@ MAX_CANDIDATES = 12
 MAX_CURVES = 3
 
 
+def _bh_q_values(p_values: list[float]) -> list[float]:
+    """Benjamini–Hochberg adjusted p-values in input order."""
+    n = len(p_values)
+    order = sorted(range(n), key=p_values.__getitem__)
+    q_values = [1.0] * n
+    running = 1.0
+    for rank_index in range(n - 1, -1, -1):
+        original = order[rank_index]
+        running = min(running, p_values[original] * n / (rank_index + 1))
+        q_values[original] = min(1.0, running)
+    return q_values
+
+
 class DatasetNotFoundError(ValueError):
     """No table with a compatible clinical metadata header was found."""
 
@@ -53,6 +66,37 @@ def _event_flag(value: str) -> int | None:
 def _finite_median(fitter: KaplanMeierFitter) -> float | None:
     median = float(fitter.median_survival_time_)
     return round(median, 2) if np.isfinite(median) else None
+
+
+def _hazard_ratio(points: list[dict[str, Any]]) -> dict[str, float | None]:
+    """Unadjusted Cox hazard ratio, altered vs unaltered, with its 95% CI.
+
+    Fitted once per reported candidate from the stored per-sample points. Null
+    when the points carry no event flags or the model does not converge.
+    """
+    empty: dict[str, float | None] = {
+        "hazard_ratio": None, "hr_ci_lower": None, "hr_ci_upper": None,
+    }
+    rows = [p for p in points if p.get("event") in (0, 1)]
+    if len(rows) < 2 * MIN_GROUP or len({p["group"] for p in rows}) < 2:
+        return empty
+    import pandas as pd
+
+    frame = pd.DataFrame({
+        "duration": [float(p["value"]) for p in rows],
+        "event": [int(p["event"]) for p in rows],
+        "altered": [1 if p["group"] == "altered" else 0 for p in rows],
+    })
+    try:
+        cph = CoxPHFitter(alpha=ALPHA).fit(frame, duration_col="duration", event_col="event")
+    except Exception:  # convergence or a degenerate group; the log-rank result still stands
+        return empty
+    hr = float(np.exp(cph.params_["altered"]))
+    lower, upper = (float(np.exp(v)) for v in cph.confidence_intervals_.loc["altered"])
+    if not all(np.isfinite(v) for v in (hr, lower, upper)):
+        return empty
+    return {"hazard_ratio": round(hr, 3), "hr_ci_lower": round(lower, 3),
+            "hr_ci_upper": round(upper, 3)}
 
 
 def _curve_data(fitter: KaplanMeierFitter) -> dict[str, Any]:
@@ -114,6 +158,24 @@ class DatasetProfiler:
             if unknown:
                 raise ValueError(f"Treatments not found in eligible metadata: {', '.join(unknown)}")
         candidates = self._screen_alterations(data_dir, samples, selected_drugs)
+        eligible_tests = [(index, test["p_value"]) for index, test in enumerate(self.tests)
+                          if isinstance(test.get("p_value"), int | float) and np.isfinite(test["p_value"])]
+        q_values = _bh_q_values([float(p) for _, p in eligible_tests])
+        for index, test in enumerate(self.tests):
+            test["q_value"] = None
+            test["fdr_significant"] = False
+        for (index, _), q_value in zip(eligible_tests, q_values, strict=True):
+            self.tests[index]["q_value"] = q_value
+            self.tests[index]["fdr_significant"] = q_value <= ALPHA
+        candidates = [candidate for candidate in candidates if candidate["fdr_significant"]]
+        candidate_keys = {candidate["candidate_key"] for candidate in candidates}
+        self.points = {key: value for key, value in self.points.items() if key in candidate_keys}
+        for candidate in candidates:
+            candidate.update(_hazard_ratio(self.points[candidate["candidate_key"]]))
+        self.top_curves = {
+            gene: curve for gene, curve in self.top_curves.items()
+            if curve["association"]["fdr_significant"]
+        }
         inputs = {}
         for role, path in {"metadata": metadata_path, **self.matrix_paths}.items():
             with path.open("rb") as f:
@@ -140,8 +202,8 @@ class DatasetProfiler:
                 "weightings": None,
                 "alpha": ALPHA,
                 "confidence_level": 1 - ALPHA,
-                "significance_rule": "finite p_value <= alpha",
-                "multiple_testing_correction": "none",
+                "significance_rule": "finite Benjamini-Hochberg q_value <= alpha",
+                "multiple_testing_correction": "Benjamini-Hochberg across all eligible gene/alteration/treatment log-rank tests",
                 "min_treatment_samples": MIN_COHORT,
                 "min_altered_samples": MIN_GROUP,
                 "min_unaltered_samples": MIN_GROUP,
@@ -151,9 +213,10 @@ class DatasetProfiler:
             "selection": {
                 "eligible_tests": len(self.tests),
                 "nominally_significant_tests": sum(test["nominally_significant"] for test in self.tests),
+                "fdr_significant_tests": sum(test["fdr_significant"] for test in self.tests),
                 "reported_candidates": len(candidates),
                 "candidate_limit": MAX_CANDIDATES,
-                "rule": "Sort by log-rank p-value; keep the strongest alteration per gene/treatment; take the first 12.",
+                "rule": "Keep only q <= alpha; sort by log-rank p-value; keep the strongest alteration per gene/treatment; take the first 12.",
                 "drug_selection": "explicit" if target_drugs is not None else "goal mentions or largest eligible metadata row counts",
                 "plot_selection": "Strongest significant treatment/alteration association for each of the top 3 distinct genes.",
             },
@@ -259,7 +322,8 @@ class DatasetProfiler:
 
     def _offer_points(
         self, test: dict[str, Any], altered_s: list[str], altered_t: list[float],
-        unaltered_s: list[str], unaltered_t: list[float],
+        altered_e: list[int], unaltered_s: list[str], unaltered_t: list[float],
+        unaltered_e: list[int],
     ) -> None:
         """Keep points only while the test can still reach the reported candidates.
 
@@ -275,12 +339,15 @@ class DatasetProfiler:
                 return
             del self._contenders[rival], self.points[rival]
         self._contenders[key] = (p_value, self._seq, group)
+        # `event` is 1 for an observed event and 0 for a censored observation, so the
+        # page can draw Kaplan-Meier curves and fit a hazard ratio from the points.
         self.points[key] = [
-            {"sample_id": sid, "group": name, "value": value}
-            for name, ids, values in (
-                ("altered", altered_s, altered_t), ("unaltered", unaltered_s, unaltered_t),
+            {"sample_id": sid, "group": name, "value": value, "event": int(event)}
+            for name, ids, values, events in (
+                ("altered", altered_s, altered_t, altered_e),
+                ("unaltered", unaltered_s, unaltered_t, unaltered_e),
             )
-            for sid, value in zip(ids, values, strict=True)
+            for sid, value, event in zip(ids, values, events, strict=True)
         ]
         self.peak_points = max(self.peak_points, len(self.points))
         if len(self._contenders) > MAX_CANDIDATES:
@@ -367,7 +434,9 @@ class DatasetProfiler:
             self.tests.append(test)
             if test["nominally_significant"]:
                 candidates.append(test)
-                self._offer_points(test, altered_s, altered_t, unaltered_s, unaltered_t)
+                self._offer_points(
+                    test, altered_s, altered_t, altered_e, unaltered_s, unaltered_t, unaltered_e,
+                )
                 existing = self.top_curves.get(gene)
                 if existing is None or p_value < existing["association"]["p_value"]:
                     self.top_curves[gene] = {"association": test, "altered": _curve_data(altered_km), "unaltered": _curve_data(unaltered_km)}
@@ -386,7 +455,7 @@ def tests_csv(tests: list[dict[str, Any]]) -> str:
     columns = [
         "biomarker", "alteration_type", "drug", "test_method", "survival_estimator",
         "sample_size", "altered_samples", "unaltered_samples", "logrank_statistic", "p_value",
-        "nominally_significant", "median_os_altered", "median_os_wt", "delta_os_months",
+        "q_value", "nominally_significant", "fdr_significant", "median_os_altered", "median_os_wt", "delta_os_months",
         "altered_events", "altered_censored", "unaltered_events", "unaltered_censored", "relationship", "matrix_file",
     ]
     output = io.StringIO(newline="")
@@ -410,7 +479,8 @@ def render_summary(report: dict[str, Any]) -> str:
         f"- Targeted treatment arms screened: **{', '.join(report['drugs'])}**",
         f"- Endpoint: **{endpoint['label']}** (`{endpoint['duration_column']}`, `{endpoint['event_column']}`; months).",
         f"- Gene/alteration/treatment comparisons tested: **{report['selection']['eligible_tests']}**",
-        f"- Nominally significant comparisons (unadjusted log-rank p ≤ {ALPHA}): **{report['selection']['nominally_significant_tests']}**",
+        f"- Nominal comparisons (log-rank p ≤ {ALPHA}): **{report['selection']['nominally_significant_tests']}**",
+        f"- Comparisons passing Benjamini–Hochberg FDR (q ≤ {ALPHA}): **{report['selection']['fdr_significant_tests']}**",
         f"- Candidate associations reported after deduplication and the top-{MAX_CANDIDATES} limit: **{len(report['candidates'])}**",
         "", "## Statistical methods and significance", "",
         "- Survival estimator: **Kaplan-Meier**, using `lifelines.KaplanMeierFitter` separately for altered and unaltered samples. "
@@ -418,14 +488,14 @@ def render_summary(report: dict[str, Any]) -> str:
         "- Primary comparison: **unweighted two-group log-rank test**, using `lifelines.statistics.logrank_test`. "
         "The null hypothesis is equal hazards/survival functions across groups. The statistic is compared with a chi-squared distribution with 1 degree of freedom. "
         "Kaplan-Meier is the estimator; log-rank supplies the comparison p-value.",
-        f"- **Statistical significance means a finite, unadjusted log-rank p-value ≤ {ALPHA}.** "
-        "No multiple-testing correction or false discovery rate control is applied; these remain nominal, exploratory associations.",
+        f"- **Candidate significance means a finite Benjamini–Hochberg adjusted q-value ≤ {ALPHA}.** "
+        "The FDR correction covers all eligible gene/alteration/treatment log-rank tests in this session. Raw p-values are also retained; the screen remains exploratory.",
         f"- Eligibility: at least {MIN_COHORT} valid metadata samples exposed to a treatment and at least {MIN_GROUP} altered and {MIN_GROUP} unaltered matched observations per gene.",
         "- Effects are **Kaplan-Meier median survival** and altered minus unaltered KM medians, rounded to two decimals. "
         "`NR` means the estimated survival curve did not reach 0.5; its median and any difference involving it are null in the data exports. "
         "No finite effect or direction is invented when a median is not reached.",
         "- Curves show **95% confidence intervals**, using lifelines' Greenwood log-log intervals. Plus signs mark censoring, and the tables show numbers at risk just before each time point.",
-        f"- Reporting: sort by log-rank p-value, retain the strongest alteration per gene/treatment, and show at most {MAX_CANDIDATES} candidates. "
+        f"- Reporting: retain q-value-significant comparisons, sort by log-rank p-value, keep the strongest alteration per gene/treatment, and show at most {MAX_CANDIDATES} candidates. "
         f"Plots show the strongest significant association for each of the top {MAX_CURVES} distinct genes.",
         "", "## Data handling and interpretation", "",
         f"- The table uses one endpoint throughout: `{endpoint['duration_column']}` paired with `{endpoint['event_column']}`. "
@@ -443,8 +513,8 @@ def render_summary(report: dict[str, Any]) -> str:
     ]
     if report["candidates"]:
         parts.extend([
-            "| Gene | Alteration | Drug | KM median altered / unaltered (months) | Δ KM median months | Log-rank χ² | Log-rank p | Altered / unaltered N | Events altered / unaltered |",
-            "| :--- | :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: |",
+            "| Gene | Alteration | Drug | KM median altered / unaltered (months) | Δ KM median months | Log-rank χ² | p | FDR q | Altered / unaltered N | Events altered / unaltered |",
+            "| :--- | :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ])
         for candidate in report["candidates"]:
             delta = candidate["delta_os_months"]
@@ -452,11 +522,11 @@ def render_summary(report: dict[str, Any]) -> str:
             parts.append(
                 f"| **{candidate['biomarker']}** | {candidate['alteration_type']} | {candidate['drug']} | "
                 f"{_median_text(candidate['median_os_altered'])} / {_median_text(candidate['median_os_wt'])} | {effect} | "
-                f"{candidate['logrank_statistic']:.4f} | {candidate['p_value']:.4e} | "
+                f"{candidate['logrank_statistic']:.4f} | {candidate['p_value']:.4e} | {candidate['q_value']:.4e} | "
                 f"{candidate['altered_samples']} / {candidate['unaltered_samples']} | {candidate['altered_events']} / {candidate['unaltered_events']} |"
             )
     else:
-        parts.append(f"*(No candidate alterations reached nominal log-rank significance p ≤ {ALPHA}.)*")
+        parts.append(f"*(No candidate alterations passed the Benjamini–Hochberg FDR threshold q ≤ {ALPHA}.)*")
     parts.extend(["", "## Kaplan-Meier survival curves for the top 3 biomarkers", ""])
     if not report["survival_curves"]:
         parts.append("No significant, eligible associations were available to plot.")
@@ -465,7 +535,7 @@ def render_summary(report: dict[str, Any]) -> str:
         label = f"{candidate['biomarker']} ({candidate['alteration_type']}) - {candidate['drug']}"
         parts.extend([
             f"### {rank}. {label}", "",
-            f"Log-rank p = {candidate['p_value']:.4e}; altered n = {candidate['altered_samples']}, unaltered n = {candidate['unaltered_samples']}. "
+            f"Log-rank p = {candidate['p_value']:.4e}; FDR q = {candidate['q_value']:.4e}; altered n = {candidate['altered_samples']}, unaltered n = {candidate['unaltered_samples']}. "
             f"KM median survival: {_median_text(candidate['median_os_altered'])} / {_median_text(candidate['median_os_wt'])} months (NR = not reached).", "",
             f"![Kaplan-Meier survival curves for {label}]({curve['path']})", "",
         ])
