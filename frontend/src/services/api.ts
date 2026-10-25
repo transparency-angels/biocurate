@@ -147,12 +147,65 @@ export function getSynthesis(id: string) {
   return request<unknown>(`/sessions/${encodeURIComponent(id)}/synthesis`)
 }
 
+export interface KmDataPoint {
+  time: number
+  survival_probability: number
+  ci_lower?: number | null
+  ci_upper?: number | null
+  at_risk?: number
+  group: 'altered' | 'unaltered' | string
+}
+
+export interface SurvivalCurveData {
+  association?: {
+    candidate_key?: string
+    biomarker?: string
+    alteration_type?: string
+    drug?: string
+  }
+  altered?: {
+    timeline?: number[]
+    survival_probability?: number[]
+    ci_lower?: (number | null)[]
+    ci_upper?: (number | null)[]
+    at_risk?: number[]
+  }
+  unaltered?: {
+    timeline?: number[]
+    survival_probability?: number[]
+    ci_lower?: (number | null)[]
+    ci_upper?: (number | null)[]
+    at_risk?: number[]
+  }
+  log_rank?: {
+    p_value?: number
+    test_statistic?: number
+  }
+  hazard_ratio?: number
+}
+
+export interface BiomarkerCandidate {
+  candidate_key?: string
+  biomarker?: string
+  alteration_type?: string
+  drug?: string
+  p_value?: number
+  hazard_ratio?: number
+  delta_os_months?: number
+  sample_size?: number
+  median_surv_altered?: number
+  median_surv_unaltered?: number
+  cohort_sizes?: { altered?: number; unaltered?: number }
+}
+
 export interface AnalysisReport {
   sample_count?: number
   generated_at?: string
   summary_markdown?: string
-  candidates?: Array<{ candidate_key?: string; biomarker?: string; alteration_type?: string; drug?: string; p_value?: number }>
+  candidates?: BiomarkerCandidate[]
   plots?: Array<{ name: string; content_type: string; url: string }>
+  survival_curves?: SurvivalCurveData[]
+  points?: Record<string, { metric: string; unit: string; points: any[] }>
 }
 
 export interface AttachmentRecord {

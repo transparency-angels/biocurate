@@ -36,6 +36,8 @@ export interface Hypothesis {
   createdAt?: string
   elo?: number | null
   matchesPlayed?: number
+  candidateKey?: string | null
+  dataEvidence?: Record<string, unknown> | null
   title: string
   summary: string
   abstract: string

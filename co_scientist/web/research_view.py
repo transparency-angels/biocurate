@@ -193,5 +193,7 @@ def to_research_session(
             )
             mapped["elo"] = h.elo
             mapped["matchesPlayed"] = h.matches_played
+            mapped["candidateKey"] = candidate_key(h)
+            mapped["dataEvidence"] = h.data_evidence
         out.append(mapped)
     return {"id": session_id, "isDemo": False, "hypotheses": out}
