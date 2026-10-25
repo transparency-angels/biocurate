@@ -25,7 +25,7 @@ from typing import Any
 from .. import ids, timeline
 from ..attachments.intake import IncomingFile
 from ..attachments.inventory import build_inventory
-from ..attachments.store import store_incoming
+from ..attachments.store import check_quota, store_incoming
 from ..config import Config
 from ..llm.budgets import TokenBudget
 from ..llm.prompts import render
@@ -87,6 +87,7 @@ class Supervisor:
         conn = await db_mod.connect(self.cfg)
         try:
             if resume_session_id is None:
+                await check_quota(conn, self.cfg, None, attachments or [])
                 session = await self._create_session(conn, goal, preferences_text, wall_clock_seconds)
                 bind(session_id=session.id)
                 log.info(
@@ -107,11 +108,7 @@ class Supervisor:
                 tools = ToolRegistry(self.cfg).discover()
                 deps = AgentDeps(cfg=self.cfg, db=conn, llm=llm, tools=tools)
 
-                try:
-                    stored = await store_incoming(conn, self.cfg, session.id, attachments or [])
-                except ValueError:
-                    await sess_repo.set_status(conn, session.id, "failed")
-                    raise
+                stored = await store_incoming(conn, self.cfg, session.id, attachments or [])
                 if stored:
                     await timeline.post(
                         conn, session.id, kind="attachments_received",

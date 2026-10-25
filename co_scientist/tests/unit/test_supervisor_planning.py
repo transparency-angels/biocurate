@@ -13,7 +13,7 @@ import pytest
 from co_scientist.agents.supervisor import Supervisor
 from co_scientist.attachments.intake import IncomingFile
 from co_scientist.attachments.inventory import build_inventory
-from co_scientist.attachments.store import store_incoming
+from co_scientist.attachments.store import AttachmentQuotaError, store_incoming
 from co_scientist.llm.types import SynthMessage, ToolUseBlock
 from co_scientist.orchestrator.termination import StopReason
 from co_scientist.storage.repos import attachments as att_repo
@@ -145,9 +145,36 @@ async def test_parse_goal_failure_defaults_to_no_dataset(
 
 async def test_session_over_quota_stores_nothing(tmp_cfg, conn) -> None:
     tmp_cfg.attachments.max_session_mb = 0
-    with pytest.raises(ValueError, match="session"):
+    with pytest.raises(AttachmentQuotaError, match="session"):
         await store_incoming(conn, tmp_cfg, "ses_q", [_tab("a.csv", _csv(2))])
     assert await att_repo.list_for_session(conn, "ses_q") == []
+
+
+async def test_over_quota_run_creates_no_session(tmp_cfg, monkeypatch) -> None:
+    from co_scientist.storage import db as db_mod
+
+    tmp_cfg.attachments.max_session_mb = 0
+    sup, _llm, _seen = _wire(monkeypatch, tmp_cfg, None)
+    with pytest.raises(AttachmentQuotaError):
+        await sup.run_session("g", attachments=[_tab("a.csv", _csv(2))])
+    conn = await db_mod.connect(tmp_cfg)
+    try:
+        async with conn.execute("SELECT COUNT(*) FROM sessions") as cur:
+            assert (await cur.fetchone())[0] == 0
+    finally:
+        await conn.close()
+
+
+def test_non_quota_errors_are_not_reported_as_quota(tmp_cfg, monkeypatch) -> None:
+    from co_scientist.cli import run
+
+    async def boom(self, goal, **kw):
+        raise ValueError("deep failure")
+
+    monkeypatch.setattr(Supervisor, "run_session", boom)
+    monkeypatch.setattr("co_scientist.cli._require_backend", lambda cfg: None)
+    with pytest.raises(ValueError, match="deep failure"):
+        run(SimpleNamespace(obj=(tmp_cfg, None)), "g", None, 3, None, None, None, None)
 
 
 def test_cli_run_attach_stores_files_and_plans(tmp_cfg, tmp_path, monkeypatch, capsys) -> None:

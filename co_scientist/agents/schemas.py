@@ -230,8 +230,15 @@ RECORD_RESEARCH_PLAN_TOOL: dict[str, Any] = {
             "idea_attributes": {"type": "array", "items": {"type": "string"}},
             "domain_hint":     {"type": "string"},
             "notes":           {"type": "string"},
-            "has_dataset":     {"type": "boolean", "description": "True only if an attached tabular file is clinical/omics data worth analysing."},
-            "data_sources":    {"type": "array", "items": {"type": "string"}, "description": "Ids of attached files to analyse, from the inventory only."},
+            "has_dataset": {
+                "type": "boolean",
+                "description": "True only if an attached tabular file is clinical/omics data "
+                               "worth analysing.",
+            },
+            "data_sources": {
+                "type": "array", "items": {"type": "string"},
+                "description": "Ids of attached files to analyse, from the inventory only.",
+            },
         },
         "required": ["objective", "preferences", "idea_attributes"],
     },

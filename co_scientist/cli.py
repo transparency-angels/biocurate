@@ -363,6 +363,7 @@ def run(
     prefs = preferences_file.read_text(encoding="utf-8") if preferences_file else None
     from .agents.supervisor import Supervisor
     from .attachments.intake import IntakeError, accept_uploads
+    from .attachments.store import AttachmentQuotaError
 
     incoming = None
     try:
@@ -379,7 +380,7 @@ def run(
             sup.run_session(goal, preferences_text=prefs, n_initial=n_initial,
                             wall_clock_seconds=wall_clock, attachments=incoming)
         )
-    except ValueError as exc:  # attachment quota exceeded
+    except AttachmentQuotaError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(2) from exc
     console.print(f"[green]Done.[/green] session={session_id}")
