@@ -183,6 +183,25 @@ function ResearchActions({ pinned, canDelete, deleting, onTogglePin, onDelete }:
 }) {
   const menu = useRef<HTMLDetailsElement>(null)
   const close = () => { if (menu.current) menu.current.open = false }
+  useEffect(() => {
+    const dismiss = (event: PointerEvent) => {
+      if (event.target instanceof Node && !menu.current?.contains(event.target) && menu.current) {
+        menu.current.open = false
+      }
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && menu.current?.open) {
+        menu.current.open = false
+        menu.current.querySelector('summary')?.focus()
+      }
+    }
+    document.addEventListener('pointerdown', dismiss)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', dismiss)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [])
   return (
     <details ref={menu} className="group relative shrink-0">
       <summary aria-label="Research actions" className="flex size-9 cursor-pointer list-none items-center justify-center rounded-lg text-muted-foreground outline-none hover:bg-secondary hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 [&::-webkit-details-marker]:hidden">
