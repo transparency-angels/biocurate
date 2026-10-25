@@ -17,16 +17,18 @@ const TABS = [
 // Data and Sources scroll inside the panel on desktop only. Below `lg` the panel
 // stacks under the list and the page scrolls, so touch never meets a nested scroller.
 const scrollPanel = 'lg:max-h-[32rem] lg:overflow-y-auto lg:overscroll-contain'
+const sourcesScrollPanel = 'lg:max-h-[48rem] lg:overflow-y-auto lg:overscroll-contain'
 
 interface HypothesisTabsProps {
   id: string
+  sessionId: string
   hypothesis: Hypothesis
   total: number
   activeTab: HypothesisTab
   onTabChange: (tab: HypothesisTab) => void
 }
 
-export function HypothesisTabs({ id, hypothesis, total, activeTab, onTabChange }: HypothesisTabsProps) {
+export function HypothesisTabs({ id, sessionId, hypothesis, total, activeTab, onTabChange }: HypothesisTabsProps) {
   const contentClass = 'outline-none focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:ring-inset'
 
   return (
@@ -59,9 +61,9 @@ export function HypothesisTabs({ id, hypothesis, total, activeTab, onTabChange }
           <EvaluationTab hypothesis={hypothesis} total={total} />
         </Tabs.Content>
         <Tabs.Content key={`data-${hypothesis.id}`} value="data" className={cn(contentClass, scrollPanel)}>
-          <DataTab hypothesis={hypothesis} />
+          <DataTab hypothesis={hypothesis} sessionId={sessionId} />
         </Tabs.Content>
-        <Tabs.Content key={`sources-${hypothesis.id}`} value="sources" className={cn(contentClass, scrollPanel)}>
+        <Tabs.Content key={`sources-${hypothesis.id}`} value="sources" className={cn(contentClass, sourcesScrollPanel)}>
           <SourcesTab hypothesis={hypothesis} />
         </Tabs.Content>
       </Tabs.Root>

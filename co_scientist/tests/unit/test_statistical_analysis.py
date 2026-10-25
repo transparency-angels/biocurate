@@ -72,7 +72,7 @@ def test_survival_statistics_match_independent_vectors(cohort: Path) -> None:
     assert len(exported) == 2
     assert "logrank_statistic" in exported[0]
     assert "fisher_p_value" not in exported[0]
-    for text in ("Kaplan-Meier", "log-rank p-value ≤ 0.05", "95% confidence", "No multiple-testing correction", "Right-censoring is accounted for", "top-12"):
+    for text in ("Kaplan-Meier", "Benjamini–Hochberg", "FDR (q ≤ 0.05)", "95% confidence", "Right-censoring is accounted for", "top-12"):
         assert text in report["summary"]
 
 
@@ -211,7 +211,47 @@ def test_profile_returns_points_for_significant_candidates_only(cohort: Path) ->
     assert sum(p["group"] == "altered" for p in points) == candidate["altered_samples"]
     assert sum(p["group"] == "unaltered" for p in points) == candidate["unaltered_samples"]
     assert {p["sample_id"]: p["value"] for p in points}["S0"] == 1
-    assert all(set(p) == {"sample_id", "group", "value"} for p in points)
+    assert all(set(p) == {"sample_id", "group", "value", "event"} for p in points)
+    assert {p["event"] for p in points} <= {0, 1}
+    assert sum(p["event"] for p in points if p["group"] == "altered") == candidate["altered_events"]
+
+
+def test_reported_candidates_carry_a_cox_hazard_ratio(cohort: Path) -> None:
+    report = profile_dataset(cohort, target_drugs=["DRUG_A"])
+    for c in report["candidates"]:
+        assert {"hazard_ratio", "hr_ci_lower", "hr_ci_upper"} <= set(c)
+        if c["hazard_ratio"] is not None:
+            assert c["hr_ci_lower"] <= c["hazard_ratio"] <= c["hr_ci_upper"]
+    # The fixture's arms never overlap in time, so no finite hazard ratio exists.
+    duration = next(c for c in report["candidates"] if c["biomarker"] == "DURATION")
+    assert duration["hazard_ratio"] is None
+
+
+def test_hazard_ratio_on_overlapping_groups() -> None:
+    from co_scientist.analysis import _hazard_ratio
+
+    # Altered samples die at half the unaltered times, with overlap and censoring.
+    points = [
+        {"sample_id": f"A{i}", "group": "altered", "value": float(1 + i), "event": int(i % 3 != 0)}
+        for i in range(20)
+    ] + [
+        {"sample_id": f"U{i}", "group": "unaltered", "value": float(2 + 2 * i),
+         "event": int(i % 3 != 0)}
+        for i in range(20)
+    ]
+    hr = _hazard_ratio(points)
+    assert hr["hazard_ratio"] is not None and hr["hazard_ratio"] > 1
+    assert hr["hr_ci_lower"] < hr["hazard_ratio"] < hr["hr_ci_upper"]
+
+
+def test_hazard_ratio_is_null_without_event_flags() -> None:
+    from co_scientist.analysis import _hazard_ratio
+
+    legacy = [{"sample_id": f"S{i}", "group": "altered" if i < 15 else "unaltered",
+               "value": float(i + 1)} for i in range(30)]
+    assert _hazard_ratio(legacy) == {
+        "hazard_ratio": None, "hr_ci_lower": None, "hr_ci_upper": None,
+    }
 
 
 def test_points_memory_bounded_by_reported_candidates(

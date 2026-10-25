@@ -166,7 +166,7 @@ async def test_profile_from_attachments_stores_report_points_and_plots(
     )
 
 
-async def test_unusable_attachments_mark_failed_and_post_timeline(
+async def test_non_survival_table_gets_generic_profile(
     tmp_cfg: Config, any_conn,
 ) -> None:
     conn = any_conn
@@ -179,18 +179,17 @@ async def test_unusable_attachments_mark_failed_and_post_timeline(
 
     assert result.kind == "data_profiled"
     assert result.extra["candidates"] == []
-    assert "No clinical metadata table" in result.extra["summary"]
+    assert "Exploratory dataset analysis" in result.extra["summary"]
     (att,) = await att_repo.list_for_session(conn, session.id)
-    assert att.status == "failed"
-    assert att.error == "could not be analysed as a clinical dataset"
-    assert await analysis_repo.fetch_report(conn, session.id) is None
+    assert att.status == "analysed"
+    report = await analysis_repo.fetch_report(conn, session.id)
+    assert report is not None
+    assert report["profile_type"] == "exploratory_tabular"
+    assert report["tables"][0]["name"] == "mutations.csv"
     msgs = await timeline_repo.list_for_session(conn, session.id)
-    unusable = [m for m in msgs if m.kind == "dataset_unusable"]
-    assert len(unusable) == 1
-    assert unusable[0].title == "Dataset could not be analysed"
-    assert unusable[0].body_markdown == (
-        "No compatible clinical table was found in the selected files."
-    )
+    profiled = [m for m in msgs if m.kind == "dataset_profiled"]
+    assert len(profiled) == 1
+    assert profiled[0].title == "Dataset profiled"
 
 
 async def test_saved_report_stays_well_under_bson_limit(
@@ -294,7 +293,7 @@ def test_runtime_storage_is_not_a_dataset(tmp_path: Path) -> None:
     assert tabular_files(tmp_path) == []
 
 
-async def test_no_clinical_metadata_reports_expected_format(
+async def test_non_survival_upload_reports_general_statistics(
     tmp_path: Path, dataset_agent: tuple[DataAnalysisAgent, Task],
 ) -> None:
     agent, task = dataset_agent
@@ -303,8 +302,8 @@ async def test_no_clinical_metadata_reports_expected_format(
     )
     result = await agent.execute(task)
     assert result.extra["candidates"] == []
-    assert "No clinical metadata table" in result.extra["summary"]
-    assert "CSV" in result.extra["summary"]
+    assert "Exploratory dataset analysis" in result.extra["summary"]
+    assert "mutations.csv" in result.extra["summary"]
 
 
 async def test_data_analysis_cli_fallback_to_disk(tmp_path: Path, tmp_cfg: Config) -> None:

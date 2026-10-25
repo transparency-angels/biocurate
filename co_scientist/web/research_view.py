@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 
 from ..models import Hypothesis
 from ..models.hypothesis import CitedPaper
+from .data_view import data_analysis
 
 SHOWN_STATES = ("in_tournament", "pinned")
 _REVIEW = re.compile(r"\breviews?\b|\bmeta-?analys", re.I)
@@ -89,6 +90,8 @@ def _description(ev: Mapping[str, Any]) -> str:
         stats.append(f"Δ median OS {_fmt(ev['delta_os_months'])} months")
     if ev.get("p_value") is not None:
         stats.append(f"p = {_fmt(ev['p_value'])}")
+    if ev.get("q_value") is not None:
+        stats.append(f"FDR q = {_fmt(ev['q_value'])}")
     if ev.get("sample_size") is not None:
         stats.append(f"n = {ev['sample_size']}")
     return f"{text} ({', '.join(stats)})" if stats else text
@@ -99,9 +102,12 @@ def _data(
     points_by_key: Mapping[str, Mapping[str, Any]],
 ) -> tuple[dict[str, str], list[dict[str, Any]]]:
     key = candidate_key(h)
-    if key is None:
+    # Only display empirical values when the key matches a candidate actually
+    # computed by this session's dataset analysis. Model-authored statistics are
+    # claims, not measurements, and must not be presented as analysed results.
+    if key is None or key not in candidates:
         return {"description": "", "metric": "", "unit": ""}, []
-    ev = {**candidates.get(key, {}), **(h.data_evidence or {})}
+    ev = candidates[key]
     doc = points_by_key.get(key) or {}
     summary = {
         "description": _description(ev),
@@ -112,7 +118,8 @@ def _data(
     points = [
         {"id": str(p["sample_id"] if p.get("sample_id") is not None else p.get("id", "")),
          "label": str(p["sample_id"] if p.get("sample_id") is not None else p.get("label", p.get("id", ""))),
-         "group": str(p.get("group", "")), "value": float(p["value"])}
+         "group": str(p.get("group", "")), "value": float(p["value"]),
+         "event": bool(p["event"]) if p.get("event") in (0, 1) else None}
         for p in raw_points
         if (p.get("sample_id") is not None or p.get("id") is not None)
         and isinstance(p.get("value"), int | float)
@@ -177,10 +184,16 @@ def to_research_session(
     for rank, h in enumerate(select_hypotheses(hypotheses, include_drafts=include_drafts), 1):
         abstract, explanation = _split_text(h.full_text)
         summary, points = _data(h, candidates, points_by_key)
+        key = candidate_key(h)
+        analysis = data_analysis(
+            candidates.get(key) if key else None,
+            (points_by_key.get(key) or {}).get("points", []) if key in candidates else [],
+            report, f"{h.title}\n{h.summary}\n{h.full_text}",
+        )
         mapped = {
             "id": h.id, "rank": rank, "title": h.title, "summary": h.summary,
             "abstract": abstract, "explanation": explanation,
-            "dataSummary": summary, "dataPoints": points,
+            "dataSummary": summary, "dataPoints": points, "dataAnalysis": analysis,
             "sources": [
                 _source(h.id, n, c, journals or {}, attachments or {})
                 for n, c in enumerate(h.citations, 1)

@@ -4,21 +4,26 @@ import { AGENT_INFO } from './agentInfo'
 import { StatusPill } from './StatusPill'
 import { AGENT_STATUS } from './statusLabels'
 
-function currentWork(agent: AgentProgress) {
+function currentWork(agent: AgentProgress, sessionEnded: boolean) {
   const action = actionLabel(agent.action)
   if (agent.activity === 'running') {
     const more = agent.runningCount > 1 ? ` (${agent.runningCount} tasks)` : ''
     return { text: `${action}${more}`, current: true }
   }
   if (action) return { text: `Last task: ${action}`, current: false }
-  return { text: 'Waiting for work', current: false }
+  return {
+    text: sessionEnded ? 'Not scheduled for this research' : 'Waiting for work',
+    current: false,
+  }
 }
 
 /** One agent: what it does, its latest status and how many tasks it has finished. */
-export function AgentStatusCard({ agent }: { agent: AgentProgress }) {
+export function AgentStatusCard({ agent, sessionEnded }: { agent: AgentProgress; sessionEnded: boolean }) {
   const { icon: Icon, description } = AGENT_INFO[agent.name]
-  const status = AGENT_STATUS[agent.activity]
-  const work = currentWork(agent)
+  const status = sessionEnded && agent.activity === 'idle'
+    ? { label: 'Not scheduled', tone: 'neutral' as const }
+    : AGENT_STATUS[agent.activity]
+  const work = currentWork(agent, sessionEnded)
   const name = AGENT_LABELS[agent.name]
 
   return (

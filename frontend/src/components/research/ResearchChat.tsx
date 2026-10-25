@@ -17,7 +17,7 @@ export function ResearchChat({ sessionId, sessionStatus }: { sessionId: string; 
   const [sending, setSending] = useState(false)
   const [historyLoaded, setHistoryLoaded] = useState(() => getCachedChatHistory(sessionId) !== undefined)
   const [error, setError] = useState<string | null>(null)
-  const endRef = useRef<HTMLDivElement>(null)
+  const messagesRef = useRef<HTMLDivElement>(null)
   const canGuideResearch = sessionStatus === 'running' || sessionStatus === 'paused'
 
   useEffect(() => {
@@ -29,7 +29,10 @@ export function ResearchChat({ sessionId, sessionStatus }: { sessionId: string; 
     return () => { active = false }
   }, [sessionId])
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }) }, [messages, sending])
+  useEffect(() => {
+    const list = messagesRef.current
+    if (list) list.scrollTo({ top: list.scrollHeight, behavior: 'smooth' })
+  }, [messages, sending])
 
   async function submit(event?: FormEvent) {
     event?.preventDefault()
@@ -50,13 +53,13 @@ export function ResearchChat({ sessionId, sessionStatus }: { sessionId: string; 
   }
 
   return (
-    <section aria-labelledby="research-chat-title" className="flex min-h-[34rem] flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-sm lg:min-h-[min(68dvh,54rem)]">
+    <section aria-labelledby="research-chat-title" className="flex h-[min(72dvh,58rem)] min-h-[34rem] min-w-0 flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
       <header className="flex items-center gap-3 border-b border-border px-5 py-4 sm:px-6">
         <span className="flex size-9 items-center justify-center rounded-xl bg-brand/10 text-brand"><MessageCircle aria-hidden="true" className="size-[1.125rem]" /></span>
         <div className="min-w-0"><h2 id="research-chat-title" className="text-sm font-semibold text-foreground">Research conversation</h2><p className="mt-0.5 text-xs text-muted-foreground">Grounded in this session’s saved findings</p></div>
       </header>
 
-      <div aria-live="polite" className="flex-1 space-y-5 overflow-y-auto px-4 py-5 sm:px-6">
+      <div ref={messagesRef} aria-live="polite" className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-4 py-5 sm:px-6">
         {messages.length === 0 ? (
           <div className="flex min-h-[23rem] flex-col items-center justify-center text-center">
             <span className="flex size-11 items-center justify-center rounded-2xl border border-brand/15 bg-brand/[0.05] text-brand"><Sparkles aria-hidden="true" className="size-5" /></span>
@@ -79,7 +82,6 @@ export function ResearchChat({ sessionId, sessionStatus }: { sessionId: string; 
           </article>
         ))}
         {sending && <div className="mr-auto flex items-center gap-2 rounded-xl bg-muted/55 px-4 py-3 text-xs text-muted-foreground"><LoaderCircle aria-hidden="true" className="size-4 animate-spin text-brand" />Thinking through the saved research…</div>}
-        <div ref={endRef} />
       </div>
 
       <form onSubmit={(event) => void submit(event)} className="border-t border-border bg-background/70 p-3 sm:p-4">

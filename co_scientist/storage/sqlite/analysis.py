@@ -12,7 +12,10 @@ from ..atlas._codec import aware, now
 
 REPORT_FIELDS = (
     "summary_markdown", "tests", "methods", "candidates", "selection",
-    "sample_count", "drugs", "plots", "survival_curves",
+    "sample_count", "drugs", "plots", "generated_at", "profile_type", "tables",
+    "group_comparisons", "group_comparisons_total", "correlations", "join_audit", "screening",
+    # The data tab's methods panel and the fallback curves for points without event flags.
+    "endpoint", "software", "inputs", "survival_curves",
 )
 
 

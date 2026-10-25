@@ -1,6 +1,7 @@
 import type { ResearchSession } from '@/types/research'
 import { normaliseSynthesis } from './researchOverviewAdapter'
 import type { ProgressSnapshot } from './eventAdapter'
+import type { ResearchRunSettings } from '@/features/research/types'
 
 const API_ROOT = '/api'
 const responseCache = new Map<string, unknown>()
@@ -47,10 +48,16 @@ function cached<T>(path: string): T | undefined {
   return responseCache.get(path) as T | undefined
 }
 
-export async function createResearchSession(question: string, files: File[]) {
+export async function createResearchSession(question: string, files: File[], settings?: ResearchRunSettings) {
   const body = new FormData()
   body.append('question', question)
   files.forEach((file) => body.append('files', file))
+  if (settings) {
+    body.append('budget_usd', String(settings.budgetUsd))
+    body.append('budget_tokens', String(settings.budgetTokens))
+    body.append('wall_clock_seconds', String(settings.wallClockMinutes * 60))
+    body.append('n_initial', String(settings.initialHypotheses))
+  }
   const result = await request<{ session_id: string }>('/sessions', { method: 'POST', body })
   return result.session_id
 }
@@ -202,6 +209,11 @@ export interface AnalysisReport {
   sample_count?: number
   generated_at?: string
   summary_markdown?: string
+  profile_type?: string
+  group_comparisons?: unknown[]
+  group_comparisons_total?: number
+  selection?: { group_comparisons?: number }
+  correlations?: unknown[]
   candidates?: BiomarkerCandidate[]
   plots?: Array<{ name: string; content_type: string; url: string }>
   survival_curves?: SurvivalCurveData[]

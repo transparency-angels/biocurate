@@ -69,6 +69,20 @@ from .schemas import RECORD_RESEARCH_PLAN_TOOL
 log = get_logger("supervisor")
 
 
+def _structured_tabular_ids(inventory: list[dict[str, Any]]) -> list[str]:
+    """Select attached tables with multiple fields and at least one data row."""
+    return list(dict.fromkeys(
+        item["id"] for item in inventory
+        if item.get("kind") == "tabular"
+        and isinstance(item.get("id"), str)
+        and isinstance(item.get("header"), list) and len(item["header"]) >= 2
+        and isinstance(item.get("sample_rows"), list) and any(
+            isinstance(row, list) and len(row) >= 2 and any(str(cell).strip() for cell in row)
+            for row in item["sample_rows"]
+        )
+    ))
+
+
 # ----------------------------- public API ----------------------------- #
 
 
@@ -309,17 +323,22 @@ class Supervisor:
                     record = inp
                     break
         if record is None:
-            log.warning("parse_goal_no_record", note="falling back to bare ResearchPlan")
+            log.warning("parse_goal_no_record", note="using structured uploads from the attachment inventory")
+            sources = _structured_tabular_ids(inventory)
             return ResearchPlan(
                 objective=goal.strip(), preferences=[], idea_attributes=[],
-                has_dataset=False, data_sources=[],
+                has_dataset=bool(sources), data_sources=sources,
             )
-        tabular = {e["id"] for e in inventory if e.get("kind") == "tabular"}
+        eligible = set(_structured_tabular_ids(inventory))
         raw_sources = record.get("data_sources") or []
-        data_sources = list(dict.fromkeys(
-            s for s in raw_sources if isinstance(s, str) and s in tabular
+        selected_sources = list(dict.fromkeys(
+            s for s in raw_sources if isinstance(s, str) and s in eligible
         ))
-        has_dataset = bool(record.get("has_dataset", False)) and bool(data_sources)
+        # The user deliberately attached structured data. If the planner misses
+        # it or returns invalid IDs, use the inventory heuristic rather than
+        # silently skipping statistical analysis.
+        data_sources = selected_sources if record.get("has_dataset") and selected_sources else _structured_tabular_ids(inventory)
+        has_dataset = bool(data_sources)
         return ResearchPlan(
             objective=record.get("objective", goal.strip()),
             preferences=record.get("preferences", []),
@@ -470,7 +489,9 @@ class Supervisor:
         if result.kind == "data_profiled":
             candidates = result.extra.get("candidates", [])
             summary = result.extra.get("summary", "")
-            n_gen = max(3, min(len(candidates), 5)) if candidates else 3
+            # Keep the initial result set consistent across literature and data
+            # driven sessions: three hypotheses at most for this first pass.
+            n_gen = 3
             for i in range(n_gen):
                 cand = candidates[i] if i < len(candidates) else (candidates[0] if candidates else None)
                 await task_repo.enqueue(conn, Task(

@@ -1,5 +1,5 @@
 import { useId, useLayoutEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react'
-import { ArrowUp, FileText, LoaderCircle, Plus, X } from 'lucide-react'
+import { ArrowUp, FileText, LoaderCircle, Plus, Settings2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import {
@@ -32,6 +32,11 @@ export function ResearchComposer({ onSubmit }: ResearchComposerProps) {
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [problems, setProblems] = useState<string[]>([])
   const [pending, setPending] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [budgetUsd, setBudgetUsd] = useState(25)
+  const [budgetTokens, setBudgetTokens] = useState(5_000_000)
+  const [wallClockMinutes, setWallClockMinutes] = useState(10)
+  const [initialHypotheses, setInitialHypotheses] = useState(3)
 
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -52,7 +57,11 @@ export function ResearchComposer({ onSubmit }: ResearchComposerProps) {
     setPending(true)
     setProblems([])
     try {
-      await onSubmit({ question: question.trim(), files: attachments.map((a) => a.file) })
+      await onSubmit({
+        question: question.trim(),
+        files: attachments.map((a) => a.file),
+        settings: { budgetUsd, budgetTokens, wallClockMinutes, initialHypotheses },
+      })
       setQuestion('')
       setAttachments([])
     } catch (error) {
@@ -138,7 +147,38 @@ export function ResearchComposer({ onSubmit }: ResearchComposerProps) {
           </ul>
         )}
 
-        <div className="flex items-end gap-2">
+        <div className="relative flex items-end gap-2">
+          {settingsOpen && (
+            <section aria-label="Co-Scientist run settings" className="absolute bottom-full left-0 z-20 mb-3 w-[min(26rem,calc(100vw-3rem))] rounded-2xl border border-border bg-popover p-4 text-popover-foreground shadow-xl ring-1 ring-black/5 sm:p-5">
+              <div className="mb-4 flex items-start gap-3 border-b border-border pb-3">
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-secondary text-foreground"><Settings2 aria-hidden="true" className="size-4" /></span>
+                <div className="min-w-0 flex-1">
+                  <h2 className="text-sm font-semibold">Research settings</h2>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">Choose the limits for this research.</p>
+                </div>
+                <Button type="button" variant="ghost" size="icon-sm" className="-mr-1 -mt-1 rounded-full text-muted-foreground" aria-label="Close research settings" onClick={() => setSettingsOpen(false)}><X /></Button>
+              </div>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-4">
+                <label className="space-y-1.5 text-xs font-medium text-foreground">
+                  Spend limit (USD)
+                  <input aria-label="Spend limit in US dollars" type="number" min={0.5} max={10000} step={0.5} value={budgetUsd} onChange={(event) => setBudgetUsd(Number(event.target.value))} className="h-10 w-full rounded-xl border border-input bg-background px-3 text-sm font-normal text-foreground tabular-nums outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring/50" />
+                </label>
+                <label className="space-y-1.5 text-xs font-medium text-foreground">
+                  Token cap
+                  <input aria-label="Token cap" type="number" min={1000} max={100000000} step={1000} value={budgetTokens} onChange={(event) => setBudgetTokens(Number(event.target.value))} className="h-10 w-full rounded-xl border border-input bg-background px-3 text-sm font-normal text-foreground tabular-nums outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring/50" />
+                </label>
+                <label className="space-y-1.5 text-xs font-medium text-foreground">
+                  Time limit (minutes)
+                  <input aria-label="Time limit in minutes" type="number" min={1} max={10080} step={1} value={wallClockMinutes} onChange={(event) => setWallClockMinutes(Number(event.target.value))} className="h-10 w-full rounded-xl border border-input bg-background px-3 text-sm font-normal text-foreground tabular-nums outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring/50" />
+                </label>
+                <label className="space-y-1.5 text-xs font-medium text-foreground">
+                  Initial hypotheses
+                  <input aria-label="Initial hypothesis count" type="number" min={1} max={10} step={1} value={initialHypotheses} onChange={(event) => setInitialHypotheses(Number(event.target.value))} className="h-10 w-full rounded-xl border border-input bg-background px-3 text-sm font-normal text-foreground tabular-nums outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring/50" />
+                </label>
+              </div>
+              <p className="mt-4 rounded-xl bg-muted/60 px-3 py-2.5 text-xs leading-5 text-muted-foreground">Spend is estimated from model usage. Token and time limits stop the run when reached.</p>
+            </section>
+          )}
           <input
             ref={fileInputRef}
             type="file"
@@ -160,6 +200,21 @@ export function ResearchComposer({ onSubmit }: ResearchComposerProps) {
             onClick={() => fileInputRef.current?.click()}
           >
             <Plus />
+          </Button>
+
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-lg"
+            className="size-11 shrink-0 rounded-full text-muted-foreground hover:bg-muted hover:text-foreground [&_svg:not([class*='size-'])]:size-[1.125rem]"
+            aria-label="Research settings"
+            aria-expanded={settingsOpen}
+            aria-haspopup="dialog"
+            title="Research settings"
+            disabled={pending}
+            onClick={() => setSettingsOpen((open) => !open)}
+          >
+            <Settings2 />
           </Button>
 
           <label id={ids.label} htmlFor={`${ids.label}-field`} className="sr-only">

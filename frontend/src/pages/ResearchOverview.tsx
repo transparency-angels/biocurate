@@ -21,8 +21,23 @@ import {
   type SessionSnapshot,
 } from '@/services/api'
 import { useDocumentTitle } from '@/lib/useDocumentTitle'
-import type { Hypothesis } from '@/types/research'
+import type { DataAnalysis, Hypothesis } from '@/types/research'
 import type { Citation } from '@/types/researchOverview'
+
+const emptyDataAnalysis: DataAnalysis = {
+  kind: 'none',
+  status: 'not_tested',
+  headline: 'No dataset was analysed in this session.',
+  endpoint: null,
+  groups: [],
+  effect: null,
+  significance: null,
+  curves: [],
+  atRisk: [],
+  caveats: [],
+  methods: [],
+  relatedFindings: [],
+}
 
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'long' })
 
@@ -187,6 +202,7 @@ export function ResearchOverview() {
                   0,
                 dataSummary: existing?.dataSummary ?? { description: '', metric: '', unit: '' },
                 dataPoints: existing?.dataPoints ?? [],
+                dataAnalysis: existing?.dataAnalysis ?? emptyDataAnalysis,
                 sources: existing?.sources ?? [],
               }
               map.set(hid, updated)

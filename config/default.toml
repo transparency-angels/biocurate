@@ -6,7 +6,7 @@
 
 [run]
 concurrency = 4
-max_ideas = 15
+max_ideas = 3
 max_matches_per_idea = 15
 wall_clock_seconds = 600            # 2h default
 budget_tokens = 5_000_000

@@ -67,8 +67,10 @@ freedom. It assumes independent censoring and has greatest power under
 proportional hazards; crossing curves can reduce its ability to detect differences.
 See the [lifelines log-rank documentation](https://lifelines.readthedocs.io/en/latest/lifelines.statistics.html#lifelines.statistics.logrank_test).
 
-**Nominal significance is a finite, unadjusted log-rank p-value ≤ 0.05.** No
-multiple-testing correction or false discovery rate control is applied.
+Raw log-rank p-values are retained for every eligible comparison. Candidate
+significance requires a finite **Benjamini–Hochberg adjusted q-value ≤ 0.05**,
+with the false discovery rate controlled across all eligible gene, alteration,
+and treatment tests in the session.
 A treatment needs at least 20 eligible metadata sample IDs; a gene needs at
 least 10 altered and 10 unaltered matched samples.
 
@@ -77,9 +79,10 @@ follow-up durations. A KM median that is not reached is stored as null and shown
 as `NR`. A median difference is calculated only when both medians are finite;
 otherwise its value is null and its direction is undetermined.
 
-Significant results are sorted by log-rank p-value. The strongest alteration per
-gene/treatment pair is retained, then the report is limited to 12 candidates.
-The total significant-test count is reported separately from that display cap.
+FDR-significant results are sorted by raw log-rank p-value. The strongest
+alteration per gene/treatment pair is retained, then the report is limited to
+12 candidates. Nominal and FDR-significant test counts are reported separately
+from that display cap.
 
 ## Survival plots and outputs
 
@@ -94,7 +97,7 @@ alteration/treatment association. If fewer than three genes qualify, all
 available genes are plotted; an empty screen explains why there are no plots.
 
 Each PNG shows altered versus unaltered step curves, 95% confidence bands,
-censor marks, log-rank p-value/statistic, sample/event counts, and a table of
+censor marks, log-rank p-value/statistic and adjusted q-value, sample/event counts, and a table of
 numbers at risk just before the displayed times. Images use relative Markdown
 links under `plots/`, so the summary and plots can be moved together.
 
@@ -104,12 +107,12 @@ The other outputs are:
   endpoint, exclusions, software versions, input hashes, and aggregate survival
   probabilities/confidence intervals/event tables for the plotted associations.
 - `statistical_tests.csv`: every eligible comparison, including nonsignificant
-  tests, log-rank statistics/p-values, KM medians, and event/censoring counts.
+  tests, log-rank statistics, raw p-values, adjusted q-values, KM medians, and event/censoring counts.
 - `validation.json`: reference comparison and differences, when requested.
 
 The session agent produces the same plots and statistics for new research runs
 and stores them in the database. Downstream evidence labels identify KM median
-differences and log-rank p-values.
+differences, log-rank p-values, and adjusted q-values.
 
 ## Separate literature overview
 
