@@ -1,3 +1,4 @@
+import { API_BASE } from './api'
 import { KNOWN_EVENT_NAMES, type SseMessage } from '@/types/researchEvents'
 
 export interface EventSourceHandlers {
@@ -36,7 +37,7 @@ export interface ResearchSessionControls {
  * listeners registered for that exact name. Events with names outside KNOWN_EVENT_NAMES
  * will not arrive here; add a name to that list to receive it.
  */
-export function createSseEventSource(sessionId: string, baseUrl = ''): ResearchEventSource {
+export function createSseEventSource(sessionId: string, baseUrl = API_BASE): ResearchEventSource {
   return {
     connect({ onMessage, onError }) {
       const source = new EventSource(`${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/events`)

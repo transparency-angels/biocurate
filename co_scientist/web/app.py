@@ -13,6 +13,7 @@ unplugged — same local-first posture as the rest of the tool.
 from __future__ import annotations
 
 import asyncio
+import os
 import contextlib
 import json
 import logging as stdlib_logging
@@ -39,6 +40,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.encoders import jsonable_encoder
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -102,6 +104,13 @@ async def valid_session_id(session_id: str) -> str:
 def create_app(cfg: Config | None = None) -> FastAPI:
     cfg = cfg or load_config()
     app = FastAPI(title="AI Co-Scientist")
+    # Comma-separated origins allowed to call the API cross-origin, e.g. a frontend
+    # hosted on Vercel while this backend runs elsewhere. Unset = same-origin only.
+    cors_origins = [o.strip() for o in os.environ.get("CO_SCI_CORS_ORIGINS", "").split(",") if o.strip()]
+    if cors_origins:
+        app.add_middleware(
+            CORSMiddleware, allow_origins=cors_origins, allow_methods=["*"], allow_headers=["*"],
+        )
     app.state.cfg = cfg
     app.state.background_runs: dict[str, asyncio.Task] = {}
     api = APIRouter(

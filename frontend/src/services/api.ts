@@ -3,7 +3,10 @@ import { normaliseSynthesis } from './researchOverviewAdapter'
 import type { ProgressSnapshot } from './eventAdapter'
 import type { ResearchRunSettings } from '@/features/research/types'
 
-const API_ROOT = '/api'
+// Backend origin; empty means same origin (the Vite dev proxy). Set VITE_API_URL
+// when the frontend is hosted separately, e.g. on Vercel.
+export const API_BASE = (import.meta.env.VITE_API_URL ?? '').replace(/\/+$/, '')
+const API_ROOT = `${API_BASE}/api`
 const responseCache = new Map<string, unknown>()
 const pendingRequests = new Map<string, Promise<unknown>>()
 
